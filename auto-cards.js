@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.2.1";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1146,7 +1146,15 @@ class EnergyCardEditor extends HTMLElement {
 
 if (!customElements.get("energy-card-editor")) {
   customElements.define("energy-card-editor", EnergyCardEditor);
-}const BATTERY_I = {
+}
+
+function deviceName(hass, entityId) {
+  const ent = hass.entities?.[entityId];
+  const dev = ent?.device_id ? hass.devices?.[ent.device_id] : null;
+  return dev?.name_by_user || dev?.name || null;
+}
+
+const BATTERY_I = {
   batt: `<path d="M15.7 4H14V2h-4v2H8.3C7.6 4 7 4.6 7 5.3v15.4c0 .7.6 1.3 1.3 1.3h7.4c.7 0 1.3-.6 1.3-1.3V5.3c0-.7-.6-1.3-1.3-1.3z"/>`,
   caret: `<path d="M7 10l5 5 5-5z"/>`,
   plug: `<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2.5a7.5 7.5 0 0 1 5.9 12.1L6.4 6.1A7.5 7.5 0 0 1 12 4.5zM4.5 12a7.5 7.5 0 0 1 .6-2.9l11.8 11.8A7.5 7.5 0 0 1 4.5 12z"/>`,
