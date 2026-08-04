@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.5";
+const CARD_VERSION = "1.2.6";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1333,20 +1333,20 @@ class BatteryCard extends HTMLElement {
     if (sig === this._sig) return;
     this._sig = sig;
 
-    if (bad.length) {
+    /* Toutes les piles triées par % (les plus faibles en premier) */
+    if (bats.length) {
       e.secBatt.classList.remove("hidden");
-      e.bad.innerHTML = bad.map((b) => this._bRow(b)).join("");
+      e.sec.querySelector(".sec").textContent = bad.length
+        ? `${bad.length} à remplacer · ${bats.length} au total`
+        : `${bats.length} piles · tout va bien`;
+      const shown = c.max_rows ? bats.slice(0, c.max_rows) : bats;
+      e.bad.innerHTML = shown.map((b) => this._bRow(b)).join("");
     } else {
       e.secBatt.classList.add("hidden");
     }
 
-    if (c.show_all && bats.length > bad.length) {
-      e.acc.classList.remove("hidden");
-      const others = bats.filter((b) => b.value > c.warning);
-      e.accTotal.textContent = `${others.length} au-dessus de ${c.warning} %`;
-      e.accBody.innerHTML = others.map((b) => this._bRow(b)).join("");
-      e.acc.open = this._openAll;
-    } else e.acc.classList.add("hidden");
+    /* Section repliable masquée — tout est affiché ci-dessus */
+    e.acc.classList.add("hidden");
 
     this.shadowRoot.querySelectorAll("[data-e]").forEach((el) =>
       el.addEventListener("click", () =>
