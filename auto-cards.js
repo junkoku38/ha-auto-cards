@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.7.0";
+const CARD_VERSION = "1.8.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2921,3 +2921,368 @@ class EquipmentCardEditor extends HTMLElement {
 }
 
 if (!customElements.get("equipment-card-editor")) { customElements.define("equipment-card-editor", EquipmentCardEditor); }
+const LIGHTS_CARD_VERSION = "1.0.0";
+
+console.info(
+  `%c LIGHTS-CARD %c v${LIGHTS_CARD_VERSION} `,
+  "color:#15181e;background:#ffd88a;font-weight:700;border-radius:3px 0 0 3px;padding:2px 6px",
+  "color:#ffd88a;background:#15181e;border-radius:0 3px 3px 0;padding:2px 6px"
+);
+
+const LIGHTS_I = {
+  bulb: `<path d="M12 2a7 7 0 0 0-4 12.7V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.3A7 7 0 0 0 12 2zm-2 19h4v.5a1.5 1.5 0 0 1-1.5 1.5h-1A1.5 1.5 0 0 1 10 21.5V21z"/>`,
+  off: `<path d="M12 2a7 7 0 0 0-4 12.7V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.3A7 7 0 0 0 12 2zm0 2a5 5 0 0 1 2.9 9.1l-.9.6V17h-4v-3.3l-.9-.6A5 5 0 0 1 12 4zm-2 17h4v.5a1.5 1.5 0 0 1-1.5 1.5h-1A1.5 1.5 0 0 1 10 21.5V21z"/>`,
+  caret: `<path d="M7 10l5 5 5-5z"/>`,
+};
+
+const DIM_MODES = ["brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"];
+
+class LightsCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._built = false;
+    this._els = {};
+    this._sig = "";
+    this._openOff = false;
+  }
+
+  setConfig(config) {
+    this._config = {
+      name: "Lumières",
+      exclude: [],
+      include: [],
+      areas: null,
+      group_by_area: true,
+      show_off: true,
+      show_brightness: true,
+      max_off: 0,
+      global_off: true,
+      ...(config || {}),
+    };
+    this._built = false;
+    this._sig = "";
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+  }
+
+  static getStubConfig() { return { type: "custom:lights-card" }; }
+
+  static getConfigElement() {
+    return document.createElement("lights-card-editor");
+  }
+
+  getCardSize() { return 7; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  _lights() {
+    const c = this._config;
+    return discover(this._hass, {
+      domains: ["light"],
+      exclude: c.exclude,
+      include: c.include,
+      areas: c.areas,
+    }).filter((l) => l.state !== "unavailable");
+  }
+
+  _pct(l) {
+    return l.brightness != null ? Math.round((l.brightness / 255) * 100) : null;
+  }
+
+  _dimmable(l) {
+    return (l.supported_color_modes || []).some((m) => DIM_MODES.includes(m));
+  }
+
+  _toggle(id) {
+    this._hass.callService("light", "toggle", { entity_id: id });
+  }
+
+  _setBrightness(id, pct) {
+    this._hass.callService("light", "turn_on", { entity_id: id, brightness_pct: Number(pct) });
+  }
+
+  _allOff() {
+    const ids = this._lights().filter((l) => l.state === "on").map((l) => l.entity_id);
+    if (ids.length) this._hass.callService("light", "turn_off", { entity_id: ids });
+  }
+
+  _areaOff(areaId) {
+    const ids = this._lights().filter((l) => l.state === "on" && l.area_id === areaId).map((l) => l.entity_id);
+    if (ids.length) this._hass.callService("light", "turn_off", { entity_id: ids });
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = `<style>${LightsCard.styles}</style>
+      <ha-card>
+        <div class="ch">
+          <div class="ci"><svg viewBox="0 0 24 24">${LIGHTS_I.bulb}</svg></div>
+          <div class="ct"><b>${this._config.name}</b><span class="sub">—</span></div>
+          <div class="cc hidden">—</div>
+        </div>
+        <div class="onw hidden">
+          <div class="sec">Allumées</div>
+          <div class="ons"></div>
+          <div class="gact hidden"><div class="ab2">Tout éteindre</div></div>
+        </div>
+        <div class="okbox hidden">
+          <svg viewBox="0 0 24 24">${LIGHTS_I.off}</svg>
+          <div><b>Toutes les lumières sont éteintes</b><span class="oks">—</span></div>
+        </div>
+        <details class="acc hidden">
+          <summary class="accs"><span class="k">Éteintes</span>
+            <span class="accv"><span class="rt">—</span>
+              <svg class="car" viewBox="0 0 24 24">${LIGHTS_I.caret}</svg></span></summary>
+          <div class="accb"></div>
+        </details>
+        <div class="cf hidden"></div>
+      </ha-card>`;
+    this._built = true;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = {
+      icon: $(".ci"), sub: $(".ct .sub"), badge: $(".cc"),
+      onw: $(".onw"), ons: $(".ons"), gact: $(".gact"),
+      okbox: $(".okbox"), okSub: $(".oks"),
+      acc: $(".acc"), accTotal: $(".accs .rt"), accBody: $(".accb"),
+      foot: $(".cf"),
+    };
+    this._els.gact.querySelector(".ab2").addEventListener("click", () => this._allOff());
+    this._els.acc.addEventListener("toggle", () => { this._openOff = this._els.acc.open; });
+  }
+
+  _ago(iso) {
+    if (!iso) return "";
+    const d = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (d < 60) return `${Math.round(d)} s`;
+    if (d < 3600) return `${Math.round(d / 60)} min`;
+    if (d < 86400) return `${Math.round(d / 3600)} h`;
+    return `${Math.round(d / 86400)} j`;
+  }
+
+  _onRow(l) {
+    const pct = this._pct(l);
+    const dim = this._config.show_brightness && this._dimmable(l) && pct != null;
+    return `<div class="lr on" data-e="${l.entity_id}">
+      <span class="lb" data-a="toggle"><svg viewBox="0 0 24 24">${LIGHTS_I.bulb}</svg></span>
+      <div class="lt"><b>${l.name}</b><span>${l.area || "Sans pièce"}${pct != null ? ` · ${pct} %` : ""} · ${this._ago(l.last_changed)}</span></div>
+      ${dim ? `<input class="sl" type="range" min="1" max="100" value="${pct}" style="--f:${pct}%" data-a="dim">` : ""}
+    </div>`;
+  }
+
+  _offRow(l) {
+    return `<div class="lr off" data-e="${l.entity_id}">
+      <span class="lb"><svg viewBox="0 0 24 24">${LIGHTS_I.off}</svg></span>
+      <div class="lt"><b>${l.name}</b><span>${l.area || "Sans pièce"}</span></div>
+    </div>`;
+  }
+
+  _bindRows(root) {
+    root.querySelectorAll(".lr").forEach((el) => {
+      const id = el.dataset.e;
+      const bulb = el.querySelector(".lb");
+      if (bulb) bulb.addEventListener("click", (ev) => { ev.stopPropagation(); this._toggle(id); });
+      const sl = el.querySelector(".sl");
+      if (sl) {
+        sl.addEventListener("click", (ev) => ev.stopPropagation());
+        sl.addEventListener("input", (ev) => { ev.target.style.setProperty("--f", `${ev.target.value}%`); });
+        sl.addEventListener("change", (ev) => this._setBrightness(id, ev.target.value));
+      }
+      el.addEventListener("click", () => fireEvent(this, "hass-more-info", { entityId: id }));
+    });
+  }
+
+  _update() {
+    const c = this._config;
+    const e = this._els;
+    if (!this._hass || !this._built) return;
+
+    const lights = this._lights();
+    const on = lights.filter((l) => l.state === "on");
+    const off = lights.filter((l) => l.state !== "on");
+
+    e.sub.textContent = lights.length ? on.length ? `${on.length} allumée${on.length > 1 ? "s" : ""} sur ${lights.length}` : `${lights.length} lumières · toutes éteintes` : "Aucune lumière trouvée";
+    e.badge.textContent = on.length || "OK";
+    e.badge.className = `cc ${on.length ? "on" : "ok"}`;
+    e.badge.classList.remove("hidden");
+    e.icon.className = `ci ${on.length ? "on" : ""}`;
+
+    const sig = lights.map((l) => `${l.entity_id}:${l.state}:${l.brightness ?? ""}`).join("|") + `#${c.group_by_area}`;
+    if (sig === this._sig) return;
+    this._sig = sig;
+
+    if (on.length) {
+      e.onw.classList.remove("hidden");
+      e.okbox.classList.add("hidden");
+      if (c.group_by_area) {
+        const groups = new Map();
+        on.forEach((l) => {
+          const k = l.area_id || "__none__";
+          if (!groups.has(k)) groups.set(k, { key: k, name: l.area || "Sans pièce", items: [] });
+          groups.get(k).items.push(l);
+        });
+        e.ons.innerHTML = [...groups.values()].sort((a, b) => b.items.length - a.items.length).map((g) =>
+          `<div class="grp"><div class="gh"><span>${g.name}</span><span class="go" data-area="${g.key}">Éteindre</span></div>${g.items.map((l) => this._onRow(l)).join("")}</div>`
+        ).join("");
+        e.ons.querySelectorAll(".go").forEach((btn) => btn.addEventListener("click", (ev) => { ev.stopPropagation(); this._areaOff(btn.dataset.area === "__none__" ? null : btn.dataset.area); }));
+      } else {
+        e.ons.innerHTML = on.map((l) => this._onRow(l)).join("");
+      }
+      this._bindRows(e.ons);
+      e.gact.classList.toggle("hidden", !c.global_off || on.length < 2);
+    } else {
+      e.onw.classList.add("hidden");
+      e.gact.classList.add("hidden");
+      e.okbox.classList.toggle("hidden", !lights.length);
+      e.okSub.textContent = `${lights.length} lumière${lights.length > 1 ? "s" : ""} · dernière extinction il y a ${off.length ? this._ago(off.sort((a, b) => new Date(b.last_changed) - new Date(a.last_changed))[0].last_changed) : "—"}`;
+    }
+
+    if (c.show_off && off.length) {
+      e.acc.classList.remove("hidden");
+      e.accTotal.textContent = `${off.length} lumière${off.length > 1 ? "s" : ""}`;
+      const list = c.max_off ? off.slice(0, c.max_off) : off;
+      e.accBody.innerHTML = list.map((l) => this._offRow(l)).join("");
+      this._bindRows(e.accBody);
+      e.acc.open = this._openOff;
+    } else e.acc.classList.add("hidden");
+
+    const bits = [];
+    const noArea = lights.filter((l) => !l.area_id).length;
+    if (noArea) bits.push(`${noArea} lumière${noArea > 1 ? "s" : ""} sans pièce assignée`);
+    e.foot.textContent = bits.join(" · ");
+    e.foot.classList.toggle("hidden", !bits.length);
+  }
+}
+
+LightsCard.styles = `
+:host{--li-on:#ffd88a;--li-ok:#8fbfae;display:block;}
+*{box-sizing:border-box;}
+.hidden{display:none !important;}
+ha-card{border-radius:var(--ha-card-border-radius,18px);padding:16px 16px 14px;background:linear-gradient(170deg,#1a1d24 0%,#15181e 60%,#111318 100%);border:1px solid rgba(255,255,255,.06);color:#eef1f6;font-family:var(--primary-font-family,"Inter","Segoe UI",Roboto,sans-serif);}
+.ch{display:flex;align-items:center;gap:11px;}
+.ci{width:34px;height:34px;border-radius:11px;flex-shrink:0;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;transition:.2s;}
+.ci svg{width:17px;height:17px;fill:rgba(255,255,255,.45);transition:.2s;}
+.ci.on{background:rgba(255,216,138,.12);border-color:rgba(255,216,138,.3);}
+.ci.on svg{fill:var(--li-on);}
+.ct{flex:1;min-width:0;}
+.ct b{display:block;font-size:14px;font-weight:600;}
+.ct .sub{display:block;font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
+.cc{font-size:11px;font-weight:700;border-radius:9px;padding:5px 9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.6);}
+.cc.on{background:rgba(255,216,138,.12);border-color:rgba(255,216,138,.3);color:var(--li-on);}
+.cc.ok{background:rgba(143,191,174,.12);border-color:rgba(143,191,174,.3);color:var(--li-ok);}
+.sec{font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(255,255,255,.34);font-weight:600;margin:16px 0 6px;}
+.grp{margin-bottom:8px;}
+.gh{display:flex;align-items:baseline;justify-content:space-between;padding:5px 0 3px;border-bottom:1px solid rgba(255,255,255,.05);}
+.gh span:first-child{font-size:10px;font-weight:600;color:rgba(255,255,255,.5);letter-spacing:.3px;}
+.go{font-size:9px;font-weight:600;color:rgba(255,255,255,.35);cursor:pointer;padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.05);transition:.15s;}
+.go:hover{color:#eef1f6;background:rgba(255,255,255,.1);}
+.lr{display:flex;align-items:center;gap:10px;padding:9px 0;cursor:pointer;}
+.lb{width:28px;height:28px;border-radius:9px;flex-shrink:0;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);}
+.lb svg{width:15px;height:15px;fill:rgba(255,255,255,.4);}
+.lr.on .lb{background:rgba(255,216,138,.16);border-color:rgba(255,216,138,.34);box-shadow:0 0 12px rgba(255,216,138,.18);}
+.lr.on .lb svg{fill:var(--li-on);}
+.lb:hover{background:rgba(255,255,255,.12);}
+.lt{flex:1;min-width:0;}
+.lt b{display:block;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lt span{display:block;font-size:9.5px;color:rgba(255,255,255,.34);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lr.off .lt b{color:rgba(255,255,255,.55);font-weight:500;}
+input.sl{width:88px;flex-shrink:0;-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;margin:0;cursor:pointer;outline:none;background:linear-gradient(90deg,#c9a758 0%,var(--li-on) var(--f,50%),rgba(255,255,255,.09) var(--f,50%),rgba(255,255,255,.09) 100%);}
+input.sl::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff3d8;border:2px solid #12151c;cursor:pointer;}
+input.sl::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff3d8;border:2px solid #12151c;cursor:pointer;}
+.gact{margin-top:10px;}
+.ab2{text-align:center;font-size:12px;font-weight:600;padding:11px 0;border-radius:12px;background:rgba(255,216,138,.10);border:1px solid rgba(255,216,138,.26);color:var(--li-on);cursor:pointer;transition:.15s;}
+.ab2:hover{background:rgba(255,216,138,.18);}
+.okbox{display:flex;align-items:center;gap:11px;margin-top:15px;padding:12px 13px;border-radius:13px;background:rgba(143,191,174,.08);border:1px solid rgba(143,191,174,.24);}
+.okbox svg{width:19px;height:19px;fill:var(--li-ok);flex-shrink:0;}
+.okbox b{display:block;font-size:12px;font-weight:600;}
+.okbox span{display:block;font-size:10px;color:rgba(255,255,255,.45);margin-top:3px;}
+.acc{margin-top:11px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:0 12px;transition:.2s;}
+.acc[open]{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.11);}
+.accs{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 0;cursor:pointer;list-style:none;}
+.accs::-webkit-details-marker{display:none;}
+.k{font-size:9px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.42);font-weight:600;}
+.accv{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.45);}
+.car{width:11px;height:11px;fill:rgba(255,255,255,.35);transition:transform .2s;}
+.acc[open] .car{transform:rotate(180deg);}
+.accb{padding:2px 0 8px;}
+.cf{margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);font-size:9.5px;color:rgba(255,255,255,.34);}
+`;
+
+if (!customElements.get("lights-card")) { customElements.define("lights-card", LightsCard); }
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "lights-card",
+  name: "Lights Card (auto)",
+  description: "Lumières allumées en premier, réglage d'intensité et extinction par pièce ou globale.",
+  preview: false,
+  documentationURL: "https://github.com/junkoku38/ha-auto-cards",
+});
+
+/* ---------- Visual editor ---------- */
+
+class LightsCardEditor extends HTMLElement {
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { display: true, filters: false }; }
+  setConfig(config) {
+    this._config = { name: "Lumières", exclude: [], include: [], areas: null, group_by_area: true, show_off: true, show_brightness: true, max_off: 0, global_off: true, ...config };
+    this._render();
+  }
+  set hass(hass) { this._hass = hass; }
+  _changed(ev) {
+    const field = ev.target.dataset.field; if (!field) return;
+    let value = ev.target.value;
+    if (ev.target.type === "number") value = value === "" ? 0 : Number(value);
+    else if (ev.target.type === "checkbox") value = ev.target.checked;
+    else if (["exclude", "include", "areas"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
+    this._config = { ...this._config, [field]: value };
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+  }
+  _toggle(name) {
+    this._sections[name] = !this._sections[name];
+    const el = this.shadowRoot.querySelector(`[data-section="${name}"]`);
+    if (el) { el.classList.toggle("open", this._sections[name]); const chev = el.querySelector(".chev"); if (chev) chev.textContent = this._sections[name] ? "▾" : "▸"; }
+  }
+  _field(label, field, type, value, placeholder) { const v = value ?? (type === "number" ? 0 : ""); return `<div class="fld"><label>${label}</label><input type="${type}" data-field="${field}" value="${v}" placeholder="${placeholder || ""}"/></div>`; }
+  _checkbox(label, field, checked) { return `<div class="fld chk"><label><input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}/> ${label}</label></div>`; }
+  _textarea(label, field, value, placeholder) { const v = Array.isArray(value) ? value.join(", ") : value || ""; return `<div class="fld"><label>${label}</label><textarea data-field="${field}" placeholder="${placeholder || ""}">${v}</textarea></div>`; }
+  _section(name, label, content) { const open = this._sections[name] || false; return `<div class="sec ${open ? "open" : ""}" data-section="${name}"><div class="sh" data-toggle="${name}"><span>${label}</span><span class="chev">${open ? "▾" : "▸"}</span></div><div class="sb">${content}</div></div>`; }
+  _render() {
+    const c = this._config;
+    this.shadowRoot.innerHTML = `<style>
+      :host{display:block;}*{box-sizing:border-box;}
+      .ed{display:flex;flex-direction:column;gap:8px;padding:12px;}
+      .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+      .fld label{font-size:11px;font-weight:600;opacity:.7;}
+      .fld input,.fld select,.fld textarea{font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--secondary-background-color,#fff);color:var(--primary-text-color);font-family:inherit;}
+      .fld textarea{min-height:50px;resize:vertical;}
+      .fld.chk label{display:flex;align-items:center;gap:8px;font-size:13px;}
+      .fld.chk input{width:auto;}
+      .sec{border:1px solid var(--divider-color,#e0e0e0);border-radius:10px;overflow:hidden;}
+      .sh{display:flex;align-items:center;padding:10px 12px;cursor:pointer;background:var(--secondary-background-color,#f5f5f5);font-size:13px;font-weight:600;}
+      .sh .chev{margin-left:auto;font-size:12px;opacity:.5;}
+      .sb{padding:10px 12px;display:none;}
+      .sec.open .sb{display:block;}
+    </style>
+    <div class="ed">
+      ${this._field("Titre", "name", "text", c.name, "Lumières")}
+      ${this._section("display", "Affichage",
+        this._checkbox("Grouper par pièce", "group_by_area", c.group_by_area) +
+        this._checkbox("Afficher éteintes", "show_off", c.show_off) +
+        this._checkbox("Afficher curseur de luminosité", "show_brightness", c.show_brightness) +
+        this._checkbox("Bouton tout éteindre", "global_off", c.global_off) +
+        this._field("Max éteintes affichées (0 = tout)", "max_off", "number", c.max_off)
+      )}
+      ${this._section("filters", "Filtres",
+        this._textarea("Exclure (mots-clés)", "exclude", c.exclude, "lumière xxx") +
+        this._textarea("Inclure (entity_id)", "include", c.include, "light.xxx") +
+        this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine")
+      )}
+    </div>`;
+    this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
+    this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => { el.addEventListener("click", () => this._toggle(el.dataset.toggle)); });
+  }
+}
+
+if (!customElements.get("lights-card-editor")) { customElements.define("lights-card-editor", LightsCardEditor); }
