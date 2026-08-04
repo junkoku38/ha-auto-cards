@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.0.5";
+const CARD_VERSION = "1.0.6";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -453,7 +453,23 @@ class ComfortCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { ...config };
+    this._config = {
+      name: "Confort par pièce",
+      exclude: [],
+      include: [],
+      areas: null,
+      show_unassigned: false,
+      multiple: "average",
+      max_rows: 0,
+      humidity_low: 35,
+      humidity_high: 60,
+      humidity_very_high: 70,
+      temp_low: 17,
+      temp_high: 26,
+      outdoor: null,
+      sort: "discomfort",
+      ...config,
+    };
     this._render();
   }
 
