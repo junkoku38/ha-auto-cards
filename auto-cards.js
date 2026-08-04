@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.4";
+const CARD_VERSION = "1.9.5";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2500,12 +2500,12 @@ window.customCards.push({
 /* ---------- Visual editor ---------- */
 
 class AccessCardEditor extends HTMLElement {
-  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { display: true, filters: false }; }
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { display: true, filters: false, linked: false }; }
   setConfig(config) {
-    this._config = { name: "Accès", exclude: [], include: [], areas: null, cover_classes: null, exclude_classes: [], max_tiles: 6, show_locks: true, show_openings: true, show_all_openings: true, global_actions: true, ...config };
+    this._config = { name: "Accès", exclude: [], include: [], areas: null, cover_classes: null, exclude_classes: [], max_tiles: 6, show_locks: true, show_openings: true, show_all_openings: true, global_actions: true, linked_sensors: {}, ...config };
     this._render();
   }
-  set hass(hass) { this._hass = hass; }
+  set hass(hass) { this._hass = hass; this._render(); }
   _changed(ev) {
     const field = ev.target.dataset.field; if (!field) return;
     let value = ev.target.value;
@@ -2514,6 +2514,33 @@ class AccessCardEditor extends HTMLElement {
     else if (["exclude", "include", "areas", "exclude_classes"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
     this._config = { ...this._config, [field]: value };
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+  }
+  _entityPicker(label, field, value, domains) {
+    const v = value || "";
+    const dom = domains ? ` include-domains='${JSON.stringify(domains)}'` : "";
+    return `<div class="fld"><label>${label}</label>
+      <ha-entity-picker data-field="${field}" .value="${v}" .hass="${this._hass || ""}"${dom}></ha-entity-picker></div>`;
+  }
+  _linkedRow(target, sensor, idx) {
+    return `<div class="link-row" data-idx="${idx}">
+      <ha-entity-picker class="link-target" data-field="linked_target_${idx}" .value="${target || ""}" .hass="${this._hass || ""}" include-domains='["cover","binary_sensor","lock"]'></ha-entity-picker>
+      <span class="link-arrow">→</span>
+      <ha-entity-picker class="link-sensor" data-field="linked_sensor_${idx}" .value="${sensor || ""}" .hass="${this._hass || ""}" include-domains='["binary_sensor","sensor"]'></ha-entity-picker>
+      <span class="link-del" data-idx="${idx}">×</span>
+    </div>`;
+  }
+  _addLinked() {
+    const linked = this._config.linked_sensors || {};
+    const idx = Object.keys(linked).length;
+    this._config.linked_sensors = { ...linked, [`__new_${idx}`]: "" };
+    this._render();
+  }
+  _delLinked(idx) {
+    const linked = { ...(this._config.linked_sensors || {}) };
+    const keys = Object.keys(linked);
+    if (keys[idx]) delete linked[keys[idx]];
+    this._config.linked_sensors = linked;
+    this._render();
   }
   _toggle(name) {
     this._sections[name] = !this._sections[name];
@@ -2540,6 +2567,14 @@ class AccessCardEditor extends HTMLElement {
       .sh .chev{margin-left:auto;font-size:12px;opacity:.5;}
       .sb{padding:10px 12px;display:none;}
       .sec.open .sb{display:block;}
+      .link-list{display:flex;flex-direction:column;gap:8px;margin-bottom:8px;}
+      .link-row{display:flex;align-items:center;gap:6px;}
+      .link-row ha-entity-picker{flex:1;font-size:12px;}
+      .link-arrow{font-size:14px;color:rgba(255,255,255,.4);flex-shrink:0;}
+      .link-del{cursor:pointer;font-size:16px;color:rgba(255,107,92,.6);flex-shrink:0;padding:0 4px;}
+      .link-del:hover{color:rgba(255,107,92,1);}
+      .link-add{cursor:pointer;font-size:12px;font-weight:600;color:var(--primary-color,#03a9f4);padding:8px 0;}
+      .link-add:hover{opacity:.8;}
     </style>
     <div class="ed">
       ${this._field("Titre", "name", "text", c.name, "Accès")}
@@ -2556,9 +2591,35 @@ class AccessCardEditor extends HTMLElement {
         this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine") +
         this._textarea("Classes à exclure", "exclude_classes", c.exclude_classes, "shutter, blind")
       )}
+      ${this._section("linked", "Capteurs liés",
+        `<div class="link-list">${Object.entries(c.linked_sensors || {}).map(([k, v], i) => this._linkedRow(k, v, i)).join("")}</div>
+         <div class="link-add" data-action="add">+ Ajouter un capteur lié</div>`
+      )}
     </div>`;
+
     this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); });
     this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => { el.addEventListener("click", () => this._toggle(el.dataset.toggle)); });
+    this.shadowRoot.querySelector(".link-add")?.addEventListener("click", () => this._addLinked());
+    this.shadowRoot.querySelectorAll(".link-del").forEach((el) => { el.addEventListener("click", (e) => { e.stopPropagation(); this._delLinked(parseInt(el.dataset.idx)); }); });
+    this.shadowRoot.querySelectorAll(".link-target").forEach((el) => { el.addEventListener("change", (e) => this._updateLinked(e, "target")); });
+    this.shadowRoot.querySelectorAll(".link-sensor").forEach((el) => { el.addEventListener("change", (e) => this._updateLinked(e, "sensor")); });
+  }
+
+  _updateLinked(ev, role) {
+    const idx = parseInt(ev.target.closest(".link-row").dataset.idx);
+    const keys = Object.keys(this._config.linked_sensors || {});
+    const key = keys[idx];
+    if (!key) return;
+    const val = ev.target.value;
+    if (role === "target") {
+      const sensor = this._config.linked_sensors[key];
+      delete this._config.linked_sensors[key];
+      this._config.linked_sensors[val || `__new_${idx}`] = sensor;
+    } else {
+      this._config.linked_sensors[key] = val;
+    }
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
   }
 }
 
