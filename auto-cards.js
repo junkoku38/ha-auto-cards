@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.7";
+const CARD_VERSION = "1.9.8";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -3077,6 +3077,7 @@ class LightsCard extends HTMLElement {
       show_brightness: true,
       max_off: 0,
       global_off: true,
+      switch_match: ["lumiere", "lumière", "light", "hydroponie", "guirlande"],
       ...(config || {}),
     };
     this._built = false;
@@ -3100,12 +3101,37 @@ class LightsCard extends HTMLElement {
 
   _lights() {
     const c = this._config;
-    return discover(this._hass, {
+    // Entités light
+    const lights = discover(this._hass, {
       domains: ["light"],
       exclude: c.exclude,
       include: c.include,
       areas: c.areas,
-    }).filter((l) => l.state !== "unavailable");
+    });
+
+    // Switch qui contrôlent des lumières (mot-clés configurables)
+    const switchMatch = c.switch_match || ["lumiere", "lumière", "light", "hydroponie", "guirlande"];
+    const matchPat = switchMatch.map(norm).filter(Boolean);
+    if (matchPat.length) {
+      const switches = discover(this._hass, {
+        domains: ["switch"],
+        exclude: c.exclude,
+        areas: c.areas,
+      }).filter((s) => {
+        if (c.include.includes(s.entity_id)) return true;
+        const label = norm(`${s.entity_id} ${s.name}`);
+        return matchPat.some((p) => label.includes(p));
+      }).filter((s) => s.state !== "unavailable");
+      // Convertir les switch en pseudo-light
+      switches.forEach((s) => {
+        s.brightness = null;
+        s.supported_color_modes = [];
+        s.is_switch = true;
+      });
+      lights.push(...switches);
+    }
+
+    return lights.filter((l) => l.state !== "unavailable");
   }
 
   _pct(l) {
@@ -3354,7 +3380,7 @@ class LightsCardEditor extends HTMLElement {
     let value = ev.target.value;
     if (ev.target.type === "number") value = value === "" ? 0 : Number(value);
     else if (ev.target.type === "checkbox") value = ev.target.checked;
-    else if (["exclude", "include", "areas"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
+    else if (["exclude", "include", "areas", "switch_match"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
     this._config = { ...this._config, [field]: value };
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
   }
@@ -3396,7 +3422,8 @@ class LightsCardEditor extends HTMLElement {
       ${this._section("filters", "Filtres",
         this._textarea("Exclure (mots-clés)", "exclude", c.exclude, "lumière xxx") +
         this._textarea("Inclure (entity_id)", "include", c.include, "light.xxx") +
-        this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine")
+        this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine") +
+        this._textarea("Switch lumineux (mots-clés)", "switch_match", c.switch_match, "lumiere, light, hydroponie")
       )}
     </div>`;
     this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
