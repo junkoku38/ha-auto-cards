@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.7";
+const CARD_VERSION = "1.2.8";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -57,7 +57,7 @@ function discover(hass, opts = {}) {
 
       const reg = hass.entities?.[id];
       if (reg?.hidden || reg?.disabled_by) return;
-      if (reg?.entity_category) return;
+      if (!includeDiagnostic && reg?.entity_category) return;
 
       const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
       if (exPat.some((p) => label.includes(p))) return;
