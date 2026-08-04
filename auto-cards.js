@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.6.1";
+const CARD_VERSION = "1.6.2";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2712,13 +2712,39 @@ class EquipmentCard extends HTMLElement {
     return new Intl.NumberFormat(this._hass?.locale?.language || "fr", { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(v);
   }
 
+  _cleanName(name) {
+    return (name || "")
+      .replace(/\s*Temperature\s*/gi, "")
+      .replace(/\s*Humidity\s*/gi, "")
+      .replace(/\s*Humidité\s*/gi, "")
+      .replace(/\s*Power\s*/gi, "")
+      .replace(/\s*Puissance\s*/gi, "")
+      .replace(/\s*\[\w+\]\s*/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() || name;
+  }
+
+  _verdictLabel(it) {
+    if (it.level === "warn") {
+      if (it.note) return it.note;
+      return "Attention";
+    }
+    return "OK";
+  }
+
   _row(it) {
     const unit = it.unit || "";
     const up = (it.delta ?? 0) > 0;
     const trend = it.delta != null && Math.abs(it.delta) >= 0.5
       ? `<span class="dl ${it.level}"><svg viewBox="0 0 24 24">${up ? EQUIPMENT_I.up : EQUIPMENT_I.down}</svg>${this._fmt(Math.abs(it.delta), 1)}</span>` : "";
+    const cleanName = this._cleanName(it.name);
+    const verdict = this._verdictLabel(it);
     return `<div class="eqr ${it.level}" data-e="${it.entity_id}">
-      <span class="eqn">${it.name}${it.area ? `<i>${it.area}</i>` : ""}</span>
+      <span class="eq-ico"><svg viewBox="0 0 24 24">${EQUIPMENT_I.thermo}</svg></span>
+      <div class="eq-info">
+        <span class="eqn">${cleanName}${it.area ? `<i>${it.area}</i>` : ""}</span>
+        <span class="eq-verdict ${it.level}">${verdict}</span>
+      </div>
       ${trend}
       <span class="eqv">${this._fmt(it.value, 1)}<small>${unit}</small></span>
     </div>`;
@@ -2792,15 +2818,22 @@ ha-card{border-radius:var(--ha-card-border-radius,18px);padding:16px 16px 14px;b
 .cc.ok{background:rgba(143,191,174,.12);border-color:rgba(143,191,174,.3);color:var(--eq-ok);}
 .sec{font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(255,255,255,.34);font-weight:600;margin:16px 0 4px;}
 .rows{display:flex;flex-direction:column;}
-.eqr{display:flex;align-items:center;gap:9px;padding:9px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);}
+.eqr{display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);}
 .eqr:last-child{border-bottom:none;}
 .eqr:hover .eqn{color:#eef1f6;}
-.eqn{flex:1;font-size:11.5px;color:rgba(255,255,255,.65);min-width:0;transition:.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eq-ico{width:28px;height:28px;border-radius:8px;flex-shrink:0;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;}
+.eq-ico svg{width:14px;height:14px;fill:rgba(255,255,255,.4);}
+.eqr.warn .eq-ico{background:rgba(255,199,107,.12);}
+.eqr.warn .eq-ico svg{fill:var(--eq-warn);}
+.eq-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.eqn{font-size:12px;color:rgba(255,255,255,.75);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.15s;}
 .eqn i{font-style:normal;font-size:9px;color:rgba(255,255,255,.26);margin-left:7px;}
+.eq-verdict{font-size:9.5px;font-weight:600;color:var(--eq-ok);}
+.eq-verdict.warn{color:var(--eq-warn);}
 .dl{display:flex;align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.35);flex-shrink:0;font-variant-numeric:tabular-nums;}
 .dl svg{width:9px;height:9px;fill:currentColor;}
 .dl.warn{color:var(--eq-warn);}
-.eqv{font-size:13px;font-weight:600;width:66px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:-.2px;}
+.eqv{font-size:14px;font-weight:600;width:70px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:-.2px;}
 .eqv small{font-size:9.5px;font-weight:400;color:rgba(255,255,255,.4);margin-left:2px;}
 .eqr.warn .eqv{color:var(--eq-warn);}
 .acc{margin-top:11px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:0 12px;transition:.2s;}
