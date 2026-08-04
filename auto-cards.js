@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.4";
+const CARD_VERSION = "1.2.5";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1185,19 +1185,14 @@ class BatteryCard extends HTMLElement {
 
   setConfig(config) {
     this._config = {
-      name: "Piles et disponibilité",
+      name: "Piles",
       critical: 15,
       warning: 30,
       exclude: [],
       include: [],
       areas: null,
-      show_offline: true,
-      include_unknown: true,
-      max_offline: 8,
-      show_all_batteries: true,
-      group_offline_by_device: true,
-      outage_window: 180,
-      outage_min: 3,
+      show_all: true,
+      max_rows: 0,
       ...(config || {}),
     };
     this._built = false;
@@ -1211,7 +1206,7 @@ class BatteryCard extends HTMLElement {
     return document.createElement("battery-card-editor");
   }
 
-  getCardSize() { return 9; }
+  getCardSize() { return 6; }
 
   set hass(hass) {
     this._hass = hass;
@@ -1244,79 +1239,6 @@ class BatteryCard extends HTMLElement {
     return [...numeric, ...binary].sort((a, b) => a.value - b.value);
   }
 
-  _offline() {
-    const c = this._config;
-    if (!c.show_offline) return [];
-    const hass = this._hass;
-    const bad = c.include_unknown ? ["unavailable", "unknown"] : ["unavailable"];
-    const exPat = c.exclude.map(norm).filter(Boolean);
-    const inPat = OFFLINE_INCLUDE.map(norm).filter(Boolean);
-    const out = [];
-
-    Object.keys(hass.states).forEach((id) => {
-      const st = hass.states[id];
-      if (!bad.includes(st.state)) return;
-      const domain = id.split(".")[0];
-      if (!OFFLINE_DOMAINS.includes(domain)) return;
-      const reg = hass.entities?.[id];
-      if (reg?.hidden || reg?.disabled_by) return;
-      if (reg?.entity_category) return;
-      const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
-      if (exPat.some((p) => label.includes(p))) return;
-      /* Ne garder que les entités dont le nom évoque une batterie */
-      if (inPat.length && !inPat.some((p) => label.includes(p))) return;
-
-      out.push({
-        entity_id: id,
-        name: st.attributes?.friendly_name || id,
-        device: deviceName(hass, id),
-        device_id: hass.entities?.[id]?.device_id || null,
-        state: st.state,
-        last_changed: st.last_changed,
-        area: areaName(hass, areaOf(hass, id)),
-      });
-    });
-
-    if (!c.group_offline_by_device) return out;
-
-    const groups = new Map();
-    out.forEach((o) => {
-      const key = o.device_id || o.entity_id;
-      if (!groups.has(key))
-        groups.set(key, {
-          key,
-          name: o.device || o.name,
-          entity_id: o.entity_id,
-          state: o.state,
-          last_changed: o.last_changed,
-          area: o.area,
-          count: 0,
-        });
-      const g = groups.get(key);
-      g.count++;
-      if (new Date(o.last_changed) < new Date(g.last_changed)) g.last_changed = o.last_changed;
-    });
-    return [...groups.values()].sort(
-      (a, b) => new Date(b.last_changed) - new Date(a.last_changed)
-    );
-  }
-
-  _outage(offline) {
-    const c = this._config;
-    if (offline.length < c.outage_min) return null;
-    const times = offline
-      .map((o) => new Date(o.last_changed).getTime())
-      .sort((a, b) => a - b);
-    let best = null;
-    for (let i = 0; i < times.length; i++) {
-      let j = i;
-      while (j < times.length && times[j] - times[i] <= c.outage_window * 1000) j++;
-      const n = j - i;
-      if (n >= c.outage_min && (!best || n > best.n)) best = { n, at: times[i] };
-    }
-    return best;
-  }
-
   /* ---------- Render ---------- */
 
   _build() {
@@ -1326,11 +1248,6 @@ class BatteryCard extends HTMLElement {
           <div class="ci"><svg viewBox="0 0 24 24">${BATTERY_I.batt}</svg></div>
           <div class="ct"><b>${this._config.name}</b><span class="sub">—</span></div>
           <div class="cc hidden">—</div>
-        </div>
-
-        <div class="banner hidden">
-          <span class="bd"></span>
-          <div><b class="bt">—</b><span class="bs">—</span></div>
         </div>
 
         <div class="secw sec-batt">
@@ -1345,11 +1262,6 @@ class BatteryCard extends HTMLElement {
           <div class="accb"></div>
         </details>
 
-        <div class="secw sec-off hidden">
-          <div class="sec off-title">Hors ligne</div>
-          <div class="offs"></div>
-        </div>
-
         <div class="cf hidden"></div>
       </ha-card>`;
     this._built = true;
@@ -1357,17 +1269,11 @@ class BatteryCard extends HTMLElement {
     this._els = {
       sub: $(".ct .sub"),
       badge: $(".cc"),
-      banner: $(".banner"),
-      bTitle: $(".banner .bt"),
-      bSub: $(".banner .bs"),
       secBatt: $(".sec-batt"),
       bad: $(".brs"),
       acc: $(".acc"),
       accTotal: $(".accs .rt"),
       accBody: $(".accb"),
-      secOff: $(".sec-off"),
-      offTitle: $(".off-title"),
-      offs: $(".offs"),
       foot: $(".cf"),
     };
     this._els.acc.addEventListener("toggle", () => {
@@ -1412,38 +1318,17 @@ class BatteryCard extends HTMLElement {
     const bats = this._batteries();
     const bad = bats.filter((b) => b.value <= c.warning);
     const crit = bats.filter((b) => b.value <= c.critical);
-    const offline = this._offline();
-    const shownOff = offline.slice(0, c.max_offline);
-    const outage = this._outage(offline);
 
-    const sig =
-      bats.map((b) => `${b.entity_id}:${Math.round(b.value)}`).join("|") +
-      "#" +
-      offline.map((o) => `${o.key || o.entity_id}:${o.state}`).join("|");
+    const sig = bats.map((b) => `${b.entity_id}:${Math.round(b.value)}`).join("|");
 
     const parts = [];
     if (crit.length) parts.push(`${crit.length} critique${crit.length > 1 ? "s" : ""}`);
     else if (bad.length) parts.push(`${bad.length} à surveiller`);
-    if (offline.length) parts.push(`${offline.length} hors ligne`);
-    e.sub.textContent = parts.length ? parts.join(" · ") : `${bats.length} piles suivies · tout va bien`;
+    e.sub.textContent = parts.length ? parts.join(" · ") : `${bats.length} piles · tout va bien`;
 
-    const total = crit.length + offline.length;
-    e.badge.textContent = total || "OK";
-    e.badge.className = `cc ${total ? (crit.length ? "red" : "warn") : "ok"}`;
+    e.badge.textContent = crit.length || bad.length || "OK";
+    e.badge.className = `cc ${crit.length ? "red" : bad.length ? "warn" : "ok"}`;
     e.badge.classList.remove("hidden");
-
-    if (outage) {
-      e.banner.classList.remove("hidden");
-      e.bTitle.textContent = `${outage.n} appareils tombés en même temps`;
-      e.bSub.textContent = `Tous injoignables depuis ${this._hhmm(outage.at)} · panne de passerelle probable`;
-    } else e.banner.classList.add("hidden");
-
-    if (e.offTitle && offline.length)
-      e.offTitle.textContent = `Hors ligne · depuis ${this._ago(offline[0].last_changed)}`;
-
-    e.offs.querySelectorAll(".ofa").forEach((el, i) => {
-      if (shownOff[i]) el.textContent = this._ago(shownOff[i].last_changed);
-    });
 
     if (sig === this._sig) return;
     this._sig = sig;
@@ -1455,25 +1340,13 @@ class BatteryCard extends HTMLElement {
       e.secBatt.classList.add("hidden");
     }
 
-    if (c.show_all_batteries && bats.length > bad.length) {
+    if (c.show_all && bats.length > bad.length) {
       e.acc.classList.remove("hidden");
       const others = bats.filter((b) => b.value > c.warning);
       e.accTotal.textContent = `${others.length} au-dessus de ${c.warning} %`;
       e.accBody.innerHTML = others.map((b) => this._bRow(b)).join("");
       e.acc.open = this._openAll;
     } else e.acc.classList.add("hidden");
-
-    if (offline.length) {
-      e.secOff.classList.remove("hidden");
-      e.offs.innerHTML = shownOff
-        .map(
-          (o) => `<div class="of" data-e="${o.entity_id}">
-            <span class="ofd ${o.state === "unknown" ? "unk" : ""}"></span>
-            <span class="ofn">${o.name}${o.count > 1 ? `<i>${o.count} entités</i>` : ""}</span>
-            <span class="ofa">${this._ago(o.last_changed)}</span></div>`
-        )
-        .join("");
-    } else e.secOff.classList.add("hidden");
 
     this.shadowRoot.querySelectorAll("[data-e]").forEach((el) =>
       el.addEventListener("click", () =>
@@ -1482,11 +1355,9 @@ class BatteryCard extends HTMLElement {
     );
 
     const bits = [];
-    if (offline.length > c.max_offline)
-      bits.push(`${offline.length - c.max_offline} autres appareils hors ligne`);
     if (bats.length) {
       const min = Math.min(...bats.map((b) => b.value));
-      bits.push(`${bats.length} piles suivies · min ${Math.round(min)} %`);
+      bits.push(`${bats.length} piles · min ${Math.round(min)} %`);
     }
     e.foot.textContent = bits.join(" · ");
     e.foot.classList.toggle("hidden", !bits.length);
@@ -1593,24 +1464,19 @@ class BatteryCardEditor extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
-    this._sections = { thresholds: true, display: false, offline: false };
+    this._sections = { thresholds: true, display: false };
   }
 
   setConfig(config) {
     this._config = {
-      name: "Piles et disponibilité",
+      name: "Piles",
       critical: 15,
       warning: 30,
       exclude: [],
       include: [],
       areas: null,
-      show_offline: true,
-      include_unknown: true,
-      max_offline: 8,
-      show_all_batteries: true,
-      group_offline_by_device: true,
-      outage_window: 180,
-      outage_min: 3,
+      show_all: true,
+      max_rows: 0,
       ...config,
     };
     this._render();
@@ -1689,7 +1555,7 @@ class BatteryCardEditor extends HTMLElement {
       .sec.open .sb{display:block;}
     </style>
     <div class="ed">
-      ${this._field("Titre", "name", "text", c.name, "Piles et disponibilité")}
+      ${this._field("Titre", "name", "text", c.name, "Piles")}
 
       ${this._section("thresholds", "Seuils",
         this._field("Critique (%)", "critical", "number", c.critical) +
@@ -1700,16 +1566,8 @@ class BatteryCardEditor extends HTMLElement {
         this._textarea("Exclure (mots-clés, virgules)", "exclude", c.exclude, "sensor.xxx") +
         this._textarea("Inclure (entity_id, virgules)", "include", c.include, "sensor.xxx") +
         this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine") +
-        this._checkbox("Afficher toutes les piles", "show_all_batteries", c.show_all_batteries)
-      )}
-
-      ${this._section("offline", "Hors ligne & pannes",
-        this._checkbox("Afficher les appareils hors ligne", "show_offline", c.show_offline) +
-        this._checkbox("Inclure les entités 'unknown'", "include_unknown", c.include_unknown) +
-        this._checkbox("Regrouper par appareil", "group_offline_by_device", c.group_offline_by_device) +
-        this._field("Max appareils affichés", "max_offline", "number", c.max_offline) +
-        this._field("Fenêtre panne (secondes)", "outage_window", "number", c.outage_window) +
-        this._field("Min appareils pour panne", "outage_min", "number", c.outage_min)
+        this._checkbox("Afficher toutes les piles", "show_all", c.show_all) +
+        this._field("Lignes max (0 = illimité)", "max_rows", "number", c.max_rows)
       )}
     </div>`;
 
