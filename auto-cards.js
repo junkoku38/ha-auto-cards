@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.1.4";
+const CARD_VERSION = "1.1.5";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -70,12 +70,20 @@ function discover(hass, opts = {}) {
       if (!areaFilter.includes(norm(areaId || "")) && !areaFilter.includes(an)) return;
     }
 
+    const rawName = st.attributes?.friendly_name || id;
+    const cleanName = rawName
+      .replace(/\s*Electric\s*Consumption\s*\[W\]\s*/gi, "")
+      .replace(/\s*Electric\s*power\s*consumption\s*/gi, "")
+      .replace(/\s*Electric\s*Consumption\s*/gi, "")
+      .replace(/\s*\[W\]\s*/g, "")
+      .replace(/\s*\(\d+\)\s*$/, "")
+      .trim() || rawName;
     out.push({
       entity_id: id,
       state: st.state,
       value: Number(st.state),
       device_class: st.attributes?.device_class,
-      name: st.attributes?.friendly_name || id,
+      name: cleanName,
       area_id: areaId,
       area: areaName(hass, areaId),
     });
