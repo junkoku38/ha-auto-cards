@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.6.2";
+const CARD_VERSION = "1.6.3";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2733,10 +2733,10 @@ class EquipmentCard extends HTMLElement {
   }
 
   _row(it) {
-    const unit = it.unit || "";
+    const unit = (it.unit || "").trim();
     const up = (it.delta ?? 0) > 0;
     const trend = it.delta != null && Math.abs(it.delta) >= 0.5
-      ? `<span class="dl ${it.level}"><svg viewBox="0 0 24 24">${up ? EQUIPMENT_I.up : EQUIPMENT_I.down}</svg>${this._fmt(Math.abs(it.delta), 1)}</span>` : "";
+      ? `<span class="dl ${it.level}"><svg viewBox="0 0 24 24">${up ? EQUIPMENT_I.up : EQUIPMENT_I.down}</svg>${this._fmt(Math.abs(it.delta), 1)}${unit}</span>` : "";
     const cleanName = this._cleanName(it.name);
     const verdict = this._verdictLabel(it);
     return `<div class="eqr ${it.level}" data-e="${it.entity_id}">
@@ -2746,7 +2746,7 @@ class EquipmentCard extends HTMLElement {
         <span class="eq-verdict ${it.level}">${verdict}</span>
       </div>
       ${trend}
-      <span class="eqv">${this._fmt(it.value, 1)}<small>${unit}</small></span>
+      <span class="eqv">${this._fmt(it.value, 1)}<span class="eq-unit">${unit}</span></span>
     </div>`;
   }
 
@@ -2833,9 +2833,10 @@ ha-card{border-radius:var(--ha-card-border-radius,18px);padding:16px 16px 14px;b
 .dl{display:flex;align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.35);flex-shrink:0;font-variant-numeric:tabular-nums;}
 .dl svg{width:9px;height:9px;fill:currentColor;}
 .dl.warn{color:var(--eq-warn);}
-.eqv{font-size:14px;font-weight:600;width:70px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:-.2px;}
-.eqv small{font-size:9.5px;font-weight:400;color:rgba(255,255,255,.4);margin-left:2px;}
+.eqv{font-size:14px;font-weight:600;width:80px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:-.2px;}
+.eq-unit{font-size:10px;font-weight:500;color:rgba(255,255,255,.55);margin-left:2px;}
 .eqr.warn .eqv{color:var(--eq-warn);}
+.eqr.warn .eq-unit{color:var(--eq-warn);}
 .acc{margin-top:11px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:0 12px;transition:.2s;}
 .acc[open]{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.11);}
 .accs{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 0;cursor:pointer;list-style:none;}
