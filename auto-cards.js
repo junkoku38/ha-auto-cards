@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.2";
+const CARD_VERSION = "1.2.3";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1166,6 +1166,29 @@ const OFFLINE_DOMAINS = [
   "device_tracker", "number", "select", "button",
 ];
 
+/* Motifs exclus de la détection hors ligne : entités non pertinentes */
+const OFFLINE_EXCLUDE = [
+  "next_alarm", "next alarm",
+  "litiere", "litière",
+  "identifier", "identify",
+  "countdown",
+  "power_outage_memory",
+  "indicator_mode",
+  "switch_type",
+  "child_lock",
+  "poids", "weight",
+  "tension", "voltage",
+  "courant", "current",
+  "energie",
+  "puissance_apparente",
+  "puissance_reactive",
+  "tension_efficace",
+  "courant_apparent",
+  "courant_reactif",
+  "courant_efficace",
+  "puissance_reactive",
+];
+
 /* ---------- Card ---------- */
 
 class BatteryCard extends HTMLElement {
@@ -1244,7 +1267,7 @@ class BatteryCard extends HTMLElement {
     if (!c.show_offline) return [];
     const hass = this._hass;
     const bad = c.include_unknown ? ["unavailable", "unknown"] : ["unavailable"];
-    const exPat = c.exclude.map(norm).filter(Boolean);
+    const exPat = [...c.exclude, ...OFFLINE_EXCLUDE].map(norm).filter(Boolean);
     const out = [];
 
     Object.keys(hass.states).forEach((id) => {
