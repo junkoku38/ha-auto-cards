@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.0";
+const CARD_VERSION = "1.9.1";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -3304,10 +3304,6 @@ const CRITICAL_CLASSES = {
   moisture: "Fuite d'eau", tamper: "Sabotage", heat: "Surchauffe", cold: "Gel",
 };
 
-const OFFLINE_DOMAINS = [
-  "sensor","binary_sensor","light","switch","cover","climate","lock",
-  "media_player","vacuum","lawn_mower","fan","camera","number","select",
-];
 
 class SummaryCard extends HTMLElement {
   constructor() {
