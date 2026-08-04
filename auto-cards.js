@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.3";
+const CARD_VERSION = "1.9.4";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2167,6 +2167,7 @@ class AccessCard extends HTMLElement {
       show_openings: true,
       show_all_openings: true,
       global_actions: true,
+      linked_sensors: {},
       ...(config || {}),
     };
     this._built = false;
@@ -2206,14 +2207,44 @@ class AccessCard extends HTMLElement {
   _openings() {
     const c = this._config;
     if (!c.show_openings) return [];
-    // Exclure les sondes de radiateurs et réfrigérateurs qui ont device_class "door"
-    const exPat = [...(c.exclude || []), "radiateur", "frigo", "refrigerateur", "lave", "laveuse", "seche", "dishwasher", "lave-linge", "lave-vaisselle"].map(norm).filter(Boolean);
-    return discover(this._hass, { domains: ["binary_sensor"], deviceClasses: ["door", "window", "garage_door", "opening"], exclude: exPat, areas: c.areas })
+    // Exclure seulement les sondes de radiateurs (contact de vanne)
+    const exPat = [...(c.exclude || []), "radiateur"].map(norm).filter(Boolean);
+    const list = discover(this._hass, { domains: ["binary_sensor"], deviceClasses: ["door", "window", "garage_door", "opening"], exclude: exPat, areas: c.areas })
       .filter((x) => {
         const label = norm(`${x.entity_id} ${x.name}`);
         return !exPat.some((p) => label.includes(p));
-      })
-      .sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
+      });
+
+    // Ajouter les capteurs liés (ex: capteur d'alarme pour le portail)
+    const linked = c.linked_sensors || {};
+    Object.keys(linked).forEach((target) => {
+      const sensorId = linked[target];
+      const sensorState = this._hass.states[sensorId];
+      if (!sensorState) return;
+      // Trouver l'entité cible (cover ou binary_sensor)
+      const targetEntity = this._hass.states[target];
+      if (!targetEntity) return;
+      // Ajouter le statut du capteur lié comme information supplémentaire
+      const existing = list.find((x) => x.entity_id === target);
+      if (existing) {
+        existing.linked_state = sensorState.state;
+        existing.linked_name = sensorState.attributes?.friendly_name || sensorId;
+      } else {
+        // L'entité cible n'est pas dans la liste, l'ajouter
+        list.push({
+          entity_id: target,
+          state: targetEntity.state,
+          name: targetEntity.attributes?.friendly_name || target,
+          device_class: "door",
+          area: areaName(this._hass, areaOf(this._hass, target)),
+          last_changed: targetEntity.last_changed,
+          linked_state: sensorState.state,
+          linked_name: sensorState.attributes?.friendly_name || sensorId,
+        });
+      }
+    });
+
+    return list.sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
   }
 
   _cover(action, entityId) {
@@ -2361,7 +2392,7 @@ class AccessCard extends HTMLElement {
       e.ops.innerHTML = openSensors.map((x) =>
         `<div class="op" data-e="${x.entity_id}">
           <svg viewBox="0 0 24 24">${OPEN_ICON[x.device_class] || ACCESS_I.door}</svg>
-          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}</span>
+          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}${x.linked_state ? `<i class="linked">via ${x.linked_name}</i>` : ""}</span>
           <span class="opa">${this._ago(x.last_changed)}</span></div>`
       ).join("");
       e.ops.querySelectorAll(".op").forEach((el) =>
@@ -2377,7 +2408,7 @@ class AccessCard extends HTMLElement {
       e.accBody.innerHTML = closedSensors.map((x) =>
         `<div class="op cl" data-e="${x.entity_id}">
           <svg viewBox="0 0 24 24">${OPEN_ICON[x.device_class] || ACCESS_I.door}</svg>
-          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}</span>
+          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}${x.linked_state ? `<i class="linked">via ${x.linked_name}</i>` : ""}</span>
           <span class="opa">Fermé</span></div>`
       ).join("");
       e.accBody.querySelectorAll(".op").forEach((el) =>
