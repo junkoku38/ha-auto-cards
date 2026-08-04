@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.8";
+const CARD_VERSION = "1.9.9";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -3143,7 +3143,8 @@ class LightsCard extends HTMLElement {
   }
 
   _toggle(id) {
-    this._hass.callService("light", "toggle", { entity_id: id });
+    const domain = id.split(".")[0];
+    this._hass.callService(domain, "toggle", { entity_id: id });
   }
 
   _setBrightness(id, pct) {
@@ -3152,12 +3153,21 @@ class LightsCard extends HTMLElement {
 
   _allOff() {
     const ids = this._lights().filter((l) => l.state === "on").map((l) => l.entity_id);
-    if (ids.length) this._hass.callService("light", "turn_off", { entity_id: ids });
+    if (!ids.length) return;
+    // Grouper par domaine
+    const lights = ids.filter((id) => id.startsWith("light."));
+    const switches = ids.filter((id) => id.startsWith("switch."));
+    if (lights.length) this._hass.callService("light", "turn_off", { entity_id: lights });
+    if (switches.length) this._hass.callService("switch", "turn_off", { entity_id: switches });
   }
 
   _areaOff(areaId) {
     const ids = this._lights().filter((l) => l.state === "on" && l.area_id === areaId).map((l) => l.entity_id);
-    if (ids.length) this._hass.callService("light", "turn_off", { entity_id: ids });
+    if (!ids.length) return;
+    const lights = ids.filter((id) => id.startsWith("light."));
+    const switches = ids.filter((id) => id.startsWith("switch."));
+    if (lights.length) this._hass.callService("light", "turn_off", { entity_id: lights });
+    if (switches.length) this._hass.callService("switch", "turn_off", { entity_id: switches });
   }
 
   _build() {
