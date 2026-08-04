@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.6.0";
+const CARD_VERSION = "1.6.1";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2720,7 +2720,8 @@ class EquipmentCard extends HTMLElement {
     return `<div class="eqr ${it.level}" data-e="${it.entity_id}">
       <span class="eqn">${it.name}${it.area ? `<i>${it.area}</i>` : ""}</span>
       ${trend}
-      <span class="eqv">${this._fmt(it.value, 1)}<small>${unit}</small></span></div>`;
+      <span class="eqv">${this._fmt(it.value, 1)}<small>${unit}</small></span>
+    </div>`;
   }
 
   _update() {
