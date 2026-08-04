@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.1.3";
+const CARD_VERSION = "1.1.4";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -689,7 +689,7 @@ class EnergyCard extends HTMLElement {
       standby_threshold: 5,
       min_display: 0.5,
       price: 0.25,
-      price_entity: null,
+      price_entity: "sensor.tarif_actuel_tempo_6kva_ttc",
       currency: "€",
       energy_total: null,
       group: "none",
@@ -1002,7 +1002,7 @@ class EnergyCardEditor extends HTMLElement {
       standby_threshold: 5,
       min_display: 0.5,
       price: 0.25,
-      price_entity: null,
+      price_entity: "sensor.tarif_actuel_tempo_6kva_ttc",
       currency: "€",
       energy_total: null,
       show_rest: true,
@@ -1068,6 +1068,15 @@ class EnergyCardEditor extends HTMLElement {
       <div class="sb">${content}</div></div>`;
   }
 
+  _entityPicker(label, field, value, includeDomains) {
+    const v = value || "";
+    const domains = includeDomains ? ` include-domains='${JSON.stringify(includeDomains)}'` : "";
+    return `<div class="fld">
+      <label>${label}</label>
+      <ha-entity-picker data-field="${field}" .value="${v}" .hass="${this._hass || ""}"${domains}></ha-entity-picker>
+    </div>`;
+  }
+
   _render() {
     const c = this._config;
     this.shadowRoot.innerHTML = `<style>
@@ -1075,7 +1084,7 @@ class EnergyCardEditor extends HTMLElement {
       .ed{display:flex;flex-direction:column;gap:8px;padding:12px;}
       .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
       .fld label{font-size:11px;font-weight:600;opacity:.7;}
-      .fld input,.fld select,.fld textarea{
+      .fld input,.fld select,.fld textarea,ha-entity-picker{
         font-size:13px;padding:8px 10px;border-radius:8px;
         border:1px solid var(--divider-color,#ccc);
         background:var(--secondary-background-color,#fff);
@@ -1108,16 +1117,19 @@ class EnergyCardEditor extends HTMLElement {
       )}
 
       ${this._section("cost", "Coût & index",
-        this._field("Prix du kWh", "price", "number", c.price) +
-        this._field("Entité prix (optionnel)", "price_entity", "text", c.price_entity, "sensor.tarif_kwh") +
+        this._field("Prix du kWh (si pas d'entité)", "price", "number", c.price) +
+        this._entityPicker("Entité prix dynamique", "price_entity", c.price_entity, ["sensor","input_number"]) +
         this._field("Devise", "currency", "text", c.currency, "€") +
-        this._field("Entité index total (optionnel)", "energy_total", "text", c.energy_total, "sensor.compteur_total")
+        this._entityPicker("Entité index total", "energy_total", c.energy_total, ["sensor"])
       )}
     </div>`;
 
     this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => {
       el.addEventListener("change", (e) => this._changed(e));
       el.addEventListener("input", (e) => this._changed(e));
+    });
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((el) => {
+      el.addEventListener("change", (e) => this._changed(e));
     });
     this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => {
       el.addEventListener("click", () => this._toggle(el.dataset.toggle));
