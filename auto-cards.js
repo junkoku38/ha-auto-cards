@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.4.0";
+const CARD_VERSION = "1.5.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2112,4 +2112,414 @@ class HealthCardEditor extends HTMLElement {
 
 if (!customElements.get("health-card-editor")) {
   customElements.define("health-card-editor", HealthCardEditor);
+}/**
+ * Access Card — découverte automatique
+ * Portails, garages, volets, serrures et capteurs d'ouverture.
+ */
+
+const ACCESS_CARD_VERSION = "1.0.0";
+
+console.info(
+  `%c ACCESS-CARD %c v${ACCESS_CARD_VERSION} `,
+  "color:#15181e;background:#8fbfae;font-weight:700;border-radius:3px 0 0 3px;padding:2px 6px",
+  "color:#8fbfae;background:#15181e;border-radius:0 3px 3px 0;padding:2px 6px"
+);
+
+const ACCESS_I = {
+  gate: `<path d="M3 4h18v2H3V4zm1 4h6v12H4V8zm10 0h6v12h-6V8zM6 10v2h2v-2H6zm10 0v2h2v-2h-2z"/>`,
+  garage: `<path d="M12 3 2 9v12h4v-8h12v8h4V9L12 3zM8 15h8v2H8v-2zm0 3h8v2H8v-2z"/>`,
+  door: `<path d="M11 3H5v18h6v-2H7V5h4V3zm2 0v18h6V3h-6zm3 8.2a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>`,
+  window: `<path d="M4 3h16v18H4V3zm2 2v7h5V5H6zm7 0v7h5V5h-5zM6 14v5h5v-5H6zm7 0v5h5v-5h-5z"/>`,
+  shutter: `<path d="M3 3h18v3H3V3zm0 5h18v2H3V8zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z"/>`,
+  lock: `<path d="M12 2a5 5 0 0 0-5 5v3H6a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V11a1 1 0 0 0-1-1h-1V7a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v3H9V7a3 3 0 0 1 3-3z"/>`,
+  caret: `<path d="M7 10l5 5 5-5z"/>`,
+  up: `<path d="M12 6 5 14h14z"/>`,
+  down: `<path d="M12 18 5 10h14z"/>`,
+  stop: `<path d="M7 7h10v10H7z"/>`,
+};
+
+const COVER_ICON = { gate: ACCESS_I.gate, garage: ACCESS_I.garage, door: ACCESS_I.door, window: ACCESS_I.window, shutter: ACCESS_I.shutter, blind: ACCESS_I.shutter, awning: ACCESS_I.shutter, curtain: ACCESS_I.shutter, shade: ACCESS_I.shutter };
+const OPEN_ICON = { door: ACCESS_I.door, garage_door: ACCESS_I.garage, window: ACCESS_I.window, opening: ACCESS_I.door };
+const CLOSED_STATES = ["closed", "locked", "off"];
+
+class AccessCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._built = false;
+    this._els = {};
+    this._sig = "";
+    this._openRest = false;
+  }
+
+  setConfig(config) {
+    this._config = {
+      name: "Accès",
+      exclude: [],
+      include: [],
+      areas: null,
+      cover_classes: null,
+      exclude_classes: [],
+      max_tiles: 6,
+      show_locks: true,
+      show_openings: true,
+      show_all_openings: true,
+      global_actions: true,
+      ...(config || {}),
+    };
+    this._built = false;
+    this._sig = "";
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+  }
+
+  static getStubConfig() { return { type: "custom:access-card" }; }
+
+  static getConfigElement() {
+    return document.createElement("access-card-editor");
+  }
+
+  getCardSize() { return 8; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  _covers() {
+    const c = this._config;
+    let list = discover(this._hass, { domains: ["cover"], exclude: c.exclude, include: c.include, areas: c.areas });
+    if (c.cover_classes) list = list.filter((x) => c.cover_classes.includes(x.device_class || "cover"));
+    if (c.exclude_classes.length) list = list.filter((x) => !c.exclude_classes.includes(x.device_class || "cover"));
+    const rank = { gate: 0, garage: 1, door: 2, window: 3 };
+    return list.sort((a, b) => (rank[a.device_class] ?? 9) - (rank[b.device_class] ?? 9) || a.name.localeCompare(b.name));
+  }
+
+  _locks() {
+    const c = this._config;
+    if (!c.show_locks) return [];
+    return discover(this._hass, { domains: ["lock"], exclude: c.exclude, areas: c.areas });
+  }
+
+  _openings() {
+    const c = this._config;
+    if (!c.show_openings) return [];
+    return discover(this._hass, { domains: ["binary_sensor"], deviceClasses: ["door", "window", "garage_door", "opening"], exclude: c.exclude, areas: c.areas }).sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
+  }
+
+  _cover(action, entityId) {
+    const map = { open: "open_cover", close: "close_cover", stop: "stop_cover", toggle: "toggle" };
+    this._hass.callService("cover", map[action], { entity_id: entityId });
+  }
+
+  _all(action) {
+    const ids = this._covers().map((x) => x.entity_id);
+    if (!ids.length) return;
+    this._hass.callService("cover", action === "open" ? "open_cover" : "close_cover", { entity_id: ids });
+  }
+
+  _toggleLock(entityId) {
+    const st = this._hass.states[entityId];
+    this._hass.callService("lock", st?.state === "locked" ? "unlock" : "lock", { entity_id: entityId });
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = `<style>${AccessCard.styles}</style>
+      <ha-card>
+        <div class="ch">
+          <div class="ci"><svg viewBox="0 0 24 24">${ACCESS_I.gate}</svg></div>
+          <div class="ct"><b>${this._config.name}</b><span class="sub">—</span></div>
+          <div class="cc hidden">—</div>
+        </div>
+        <div class="tiles"></div>
+        <div class="acb hidden">
+          <div class="ab2" data-a="open">Tout ouvrir</div>
+          <div class="ab2" data-a="close">Tout fermer</div>
+        </div>
+        <div class="secw sec-open hidden">
+          <div class="sec">Ouvertures</div>
+          <div class="ops"></div>
+        </div>
+        <details class="acc hidden">
+          <summary class="accs"><span class="k">Tout est fermé</span>
+            <span class="accv"><span class="rt">—</span>
+              <svg class="car" viewBox="0 0 24 24">${ACCESS_I.caret}</svg></span></summary>
+          <div class="accb"></div>
+        </details>
+        <div class="cf hidden"></div>
+      </ha-card>`;
+    this._built = true;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = {
+      icon: $(".ci"), sub: $(".ct .sub"), badge: $(".cc"),
+      tiles: $(".tiles"), actions: $(".acb"),
+      secOpen: $(".sec-open"), ops: $(".ops"),
+      acc: $(".acc"), accLabel: $(".accs .k"), accTotal: $(".accs .rt"), accBody: $(".accb"),
+      foot: $(".cf"),
+    };
+    this._els.actions.querySelectorAll(".ab2").forEach((btn) =>
+      btn.addEventListener("click", () => this._all(btn.dataset.a))
+    );
+    this._els.acc.addEventListener("toggle", () => { this._openRest = this._els.acc.open; });
+  }
+
+  _ago(iso) {
+    if (!iso) return "";
+    const d = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (d < 60) return `${Math.round(d)} s`;
+    if (d < 3600) return `${Math.round(d / 60)} min`;
+    if (d < 86400) return `${Math.round(d / 3600)} h`;
+    return `${Math.round(d / 86400)} j`;
+  }
+
+  _label(x) {
+    const s = x.state;
+    if (s === "open") return x.position != null && x.position < 100 ? `Ouvert ${x.position} %` : "Ouvert";
+    if (s === "closed") return "Fermé";
+    if (s === "opening") return "Ouverture…";
+    if (s === "closing") return "Fermeture…";
+    if (s === "locked") return "Verrouillé";
+    if (s === "unlocked") return "Déverrouillé";
+    if (s === "unavailable") return "Injoignable";
+    return s;
+  }
+
+  _tile(x, kind) {
+    const closed = CLOSED_STATES.includes(x.state);
+    const moving = ["opening", "closing"].includes(x.state);
+    const icon = kind === "lock" ? ACCESS_I.lock : COVER_ICON[x.device_class] || ACCESS_I.door;
+    return `<div class="tl ${closed ? "closed" : moving ? "moving" : "open"}" data-e="${x.entity_id}" data-k="${kind}">
+      <svg class="ti" viewBox="0 0 24 24">${icon}</svg>
+      <b>${x.name}</b>
+      <span>${this._label(x)}</span>
+      ${kind === "cover" ? `<div class="tb"><span class="tbb" data-a="open"><svg viewBox="0 0 24 24">${ACCESS_I.up}</svg></span><span class="tbb" data-a="stop"><svg viewBox="0 0 24 24">${ACCESS_I.stop}</svg></span><span class="tbb" data-a="close"><svg viewBox="0 0 24 24">${ACCESS_I.down}</svg></span></div>` : ""}
+    </div>`;
+  }
+
+  _update() {
+    const c = this._config;
+    const e = this._els;
+    if (!this._hass || !this._built) return;
+
+    const covers = this._covers();
+    const locks = this._locks();
+    const openings = this._openings();
+    const openCovers = covers.filter((x) => !CLOSED_STATES.includes(x.state));
+    const unlocked = locks.filter((x) => x.state !== "locked");
+    const openSensors = openings.filter((x) => x.state === "on");
+    const totalOpen = openCovers.length + unlocked.length + openSensors.length;
+
+    e.sub.textContent = totalOpen ? `${totalOpen} ouvert${totalOpen > 1 ? "s" : ""} sur ${covers.length + locks.length + openings.length}` : "Tout est fermé";
+    e.badge.textContent = totalOpen || "OK";
+    e.badge.className = `cc ${totalOpen ? "warn" : "ok"}`;
+    e.badge.classList.remove("hidden");
+    e.icon.className = `ci ${totalOpen ? "warn" : "ok"}`;
+
+    const sig = [...covers, ...locks, ...openings].map((x) => `${x.entity_id}:${x.state}:${x.position ?? ""}`).join("|") + `#${c.max_tiles}`;
+
+    e.ops.querySelectorAll(".op").forEach((el) => {
+      const st = this._hass.states[el.dataset.e];
+      const t = el.querySelector(".opa");
+      if (st && t) t.textContent = this._ago(st.last_changed);
+    });
+
+    if (sig === this._sig) return;
+    this._sig = sig;
+
+    const tiles = [
+      ...covers.slice(0, c.max_tiles).map((x) => this._tile(x, "cover")),
+      ...locks.slice(0, Math.max(0, c.max_tiles - covers.length)).map((x) => this._tile(x, "lock")),
+    ];
+    e.tiles.innerHTML = tiles.join("");
+    e.tiles.classList.toggle("hidden", !tiles.length);
+
+    e.tiles.querySelectorAll(".tl").forEach((el) => {
+      const id = el.dataset.e;
+      const kind = el.dataset.k;
+      el.querySelectorAll(".tbb").forEach((btn) =>
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); this._cover(btn.dataset.a, id); })
+      );
+      el.addEventListener("click", () => {
+        if (kind === "lock") this._toggleLock(id);
+        else fireEvent(this, "hass-more-info", { entityId: id });
+      });
+    });
+
+    e.actions.classList.toggle("hidden", !c.global_actions || covers.length < 2);
+
+    if (openSensors.length) {
+      e.secOpen.classList.remove("hidden");
+      e.ops.innerHTML = openSensors.map((x) =>
+        `<div class="op" data-e="${x.entity_id}">
+          <svg viewBox="0 0 24 24">${OPEN_ICON[x.device_class] || ACCESS_I.door}</svg>
+          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}</span>
+          <span class="opa">${this._ago(x.last_changed)}</span></div>`
+      ).join("");
+      e.ops.querySelectorAll(".op").forEach((el) =>
+        el.addEventListener("click", () => fireEvent(this, "hass-more-info", { entityId: el.dataset.e }))
+      );
+    } else e.secOpen.classList.add("hidden");
+
+    const closedSensors = openings.filter((x) => x.state !== "on");
+    if (c.show_all_openings && closedSensors.length) {
+      e.acc.classList.remove("hidden");
+      e.accLabel.textContent = openSensors.length ? "Ouvertures fermées" : "Tout est fermé";
+      e.accTotal.textContent = `${closedSensors.length} capteur${closedSensors.length > 1 ? "s" : ""}`;
+      e.accBody.innerHTML = closedSensors.map((x) =>
+        `<div class="op cl" data-e="${x.entity_id}">
+          <svg viewBox="0 0 24 24">${OPEN_ICON[x.device_class] || ACCESS_I.door}</svg>
+          <span class="opn">${x.name}${x.area ? `<i>${x.area}</i>` : ""}</span>
+          <span class="opa">Fermé</span></div>`
+      ).join("");
+      e.accBody.querySelectorAll(".op").forEach((el) =>
+        el.addEventListener("click", () => fireEvent(this, "hass-more-info", { entityId: el.dataset.e }))
+      );
+      e.acc.open = this._openRest;
+    } else e.acc.classList.add("hidden");
+
+    const bits = [];
+    const hidden = covers.length + locks.length - tiles.length;
+    if (hidden > 0) bits.push(`${hidden} autre${hidden > 1 ? "s" : ""} ouvrant masqué`);
+    const last = [...covers, ...locks, ...openings].sort((a, b) => new Date(b.last_changed) - new Date(a.last_changed))[0];
+    if (last) bits.push(`Dernier mouvement · ${last.name} il y a ${this._ago(last.last_changed)}`);
+    e.foot.textContent = bits.join(" · ");
+    e.foot.classList.toggle("hidden", !bits.length);
+  }
 }
+
+AccessCard.styles = `
+:host{--ac-ok:#8fbfae;--ac-warn:#ffc76b;display:block;}
+*{box-sizing:border-box;}
+.hidden{display:none !important;}
+ha-card{border-radius:var(--ha-card-border-radius,18px);padding:16px 16px 14px;background:linear-gradient(170deg,#1a1d24 0%,#15181e 60%,#111318 100%);border:1px solid rgba(255,255,255,.06);color:#eef1f6;font-family:var(--primary-font-family,"Inter","Segoe UI",Roboto,sans-serif);}
+.ch{display:flex;align-items:center;gap:11px;}
+.ci{width:34px;height:34px;border-radius:11px;flex-shrink:0;background:rgba(143,191,174,.10);border:1px solid rgba(143,191,174,.26);display:flex;align-items:center;justify-content:center;}
+.ci svg{width:17px;height:17px;fill:var(--ac-ok);}
+.ci.warn{background:rgba(255,199,107,.10);border-color:rgba(255,199,107,.28);}
+.ci.warn svg{fill:var(--ac-warn);}
+.ct{flex:1;min-width:0;}
+.ct b{display:block;font-size:14px;font-weight:600;}
+.ct .sub{display:block;font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
+.cc{font-size:11px;font-weight:700;border-radius:9px;padding:5px 9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.6);}
+.cc.warn{background:rgba(255,199,107,.12);border-color:rgba(255,199,107,.3);color:var(--ac-warn);}
+.cc.ok{background:rgba(143,191,174,.12);border-color:rgba(143,191,174,.3);color:var(--ac-ok);}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:15px;}
+@media(max-width:340px){.tiles{grid-template-columns:repeat(2,1fr);}}
+.tl{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.075);border-radius:13px;padding:12px 8px 9px;text-align:center;cursor:pointer;transition:.15s;}
+.tl:hover{background:rgba(255,255,255,.065);}
+.ti{width:19px;height:19px;fill:var(--ac-ok);}
+.tl.open .ti,.tl.moving .ti{fill:var(--ac-warn);}
+.tl.open,.tl.moving{background:rgba(255,199,107,.08);border-color:rgba(255,199,107,.24);}
+.tl b{display:block;font-size:11px;font-weight:600;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tl span{display:block;font-size:9.5px;color:var(--ac-ok);margin-top:3px;}
+.tl.open span,.tl.moving span{color:var(--ac-warn);}
+.tl.moving span{animation:ac-blink 1.2s infinite;}
+@keyframes ac-blink{0%,100%{opacity:1}50%{opacity:.45}}
+.tb{display:flex;gap:3px;margin-top:9px;justify-content:center;}
+.tbb{flex:1;display:flex;align-items:center;justify-content:center;padding:5px 0;border-radius:7px;background:rgba(255,255,255,.05);transition:.15s;}
+.tbb:hover{background:rgba(255,255,255,.12);}
+.tbb svg{width:11px;height:11px;fill:rgba(255,255,255,.55);}
+.tbb:hover svg{fill:#eef1f6;}
+.acb{display:flex;gap:7px;margin-top:9px;}
+.ab2{flex:1;text-align:center;font-size:12px;font-weight:600;padding:11px 0;border-radius:12px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.62);cursor:pointer;transition:.15s;}
+.ab2:hover{background:rgba(255,255,255,.08);color:#eef1f6;}
+.sec{font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(255,255,255,.34);font-weight:600;margin:17px 0 6px;}
+.ops{display:flex;flex-direction:column;}
+.op{display:flex;align-items:center;gap:9px;padding:8px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.045);}
+.op:last-child{border-bottom:none;}
+.op svg{width:14px;height:14px;fill:var(--ac-warn);flex-shrink:0;}
+.op.cl svg{fill:rgba(255,255,255,.3);}
+.opn{flex:1;font-size:11.5px;color:rgba(255,255,255,.72);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.opn i{font-style:normal;font-size:9px;color:rgba(255,255,255,.28);margin-left:7px;}
+.op.cl .opn{color:rgba(255,255,255,.45);}
+.opa{font-size:9.5px;color:var(--ac-warn);flex-shrink:0;font-variant-numeric:tabular-nums;}
+.op.cl .opa{color:rgba(255,255,255,.28);}
+.acc{margin-top:11px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:0 12px;transition:.2s;}
+.acc[open]{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.11);}
+.accs{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 0;cursor:pointer;list-style:none;}
+.accs::-webkit-details-marker{display:none;}
+.k{font-size:9px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.42);font-weight:600;}
+.accv{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.45);}
+.car{width:11px;height:11px;fill:rgba(255,255,255,.35);transition:transform .2s;}
+.acc[open] .car{transform:rotate(180deg);}
+.accb{padding:2px 0 8px;}
+.cf{margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);font-size:9.5px;color:rgba(255,255,255,.34);line-height:1.5;}
+`;
+
+if (!customElements.get("access-card")) { customElements.define("access-card", AccessCard); }
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "access-card",
+  name: "Access Card (auto)",
+  description: "Portails, garages, volets, serrures et ouvertures découverts automatiquement.",
+  preview: false,
+  documentationURL: "https://github.com/junkoku38/ha-auto-cards",
+});
+
+/* ---------- Visual editor ---------- */
+
+class AccessCardEditor extends HTMLElement {
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { display: true, filters: false }; }
+  setConfig(config) {
+    this._config = { name: "Accès", exclude: [], include: [], areas: null, cover_classes: null, exclude_classes: [], max_tiles: 6, show_locks: true, show_openings: true, show_all_openings: true, global_actions: true, ...config };
+    this._render();
+  }
+  set hass(hass) { this._hass = hass; }
+  _changed(ev) {
+    const field = ev.target.dataset.field; if (!field) return;
+    let value = ev.target.value;
+    if (ev.target.type === "number") value = value === "" ? 0 : Number(value);
+    else if (ev.target.type === "checkbox") value = ev.target.checked;
+    else if (["exclude", "include", "areas", "exclude_classes"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
+    this._config = { ...this._config, [field]: value };
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+  }
+  _toggle(name) {
+    this._sections[name] = !this._sections[name];
+    const el = this.shadowRoot.querySelector(`[data-section="${name}"]`);
+    if (el) { el.classList.toggle("open", this._sections[name]); const chev = el.querySelector(".chev"); if (chev) chev.textContent = this._sections[name] ? "▾" : "▸"; }
+  }
+  _field(label, field, type, value, placeholder) { const v = value ?? (type === "number" ? 0 : ""); return `<div class="fld"><label>${label}</label><input type="${type}" data-field="${field}" value="${v}" placeholder="${placeholder || ""}"/></div>`; }
+  _checkbox(label, field, checked) { return `<div class="fld chk"><label><input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}/> ${label}</label></div>`; }
+  _textarea(label, field, value, placeholder) { const v = Array.isArray(value) ? value.join(", ") : value || ""; return `<div class="fld"><label>${label}</label><textarea data-field="${field}" placeholder="${placeholder || ""}">${v}</textarea></div>`; }
+  _section(name, label, content) { const open = this._sections[name] || false; return `<div class="sec ${open ? "open" : ""}" data-section="${name}"><div class="sh" data-toggle="${name}"><span>${label}</span><span class="chev">${open ? "▾" : "▸"}</span></div><div class="sb">${content}</div></div>`; }
+  _render() {
+    const c = this._config;
+    this.shadowRoot.innerHTML = `<style>
+      :host{display:block;}*{box-sizing:border-box;}
+      .ed{display:flex;flex-direction:column;gap:8px;padding:12px;}
+      .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+      .fld label{font-size:11px;font-weight:600;opacity:.7;}
+      .fld input,.fld select,.fld textarea{font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--secondary-background-color,#fff);color:var(--primary-text-color);font-family:inherit;}
+      .fld textarea{min-height:50px;resize:vertical;}
+      .fld.chk label{display:flex;align-items:center;gap:8px;font-size:13px;}
+      .fld.chk input{width:auto;}
+      .sec{border:1px solid var(--divider-color,#e0e0e0);border-radius:10px;overflow:hidden;}
+      .sh{display:flex;align-items:center;padding:10px 12px;cursor:pointer;background:var(--secondary-background-color,#f5f5f5);font-size:13px;font-weight:600;}
+      .sh .chev{margin-left:auto;font-size:12px;opacity:.5;}
+      .sb{padding:10px 12px;display:none;}
+      .sec.open .sb{display:block;}
+    </style>
+    <div class="ed">
+      ${this._field("Titre", "name", "text", c.name, "Accès")}
+      ${this._section("display", "Affichage",
+        this._field("Max tuiles visibles", "max_tiles", "number", c.max_tiles) +
+        this._checkbox("Afficher serrures", "show_locks", c.show_locks) +
+        this._checkbox("Afficher ouvertures", "show_openings", c.show_openings) +
+        this._checkbox("Afficher ouvertures fermées", "show_all_openings", c.show_all_openings) +
+        this._checkbox("Boutons tout ouvrir/fermer", "global_actions", c.global_actions)
+      )}
+      ${this._section("filters", "Filtres",
+        this._textarea("Exclure (mots-clés)", "exclude", c.exclude, "volet, porte") +
+        this._textarea("Inclure (entity_id)", "include", c.include, "cover.xxx") +
+        this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine") +
+        this._textarea("Classes à exclure", "exclude_classes", c.exclude_classes, "shutter, blind")
+      )}
+    </div>`;
+    this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
+    this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => { el.addEventListener("click", () => this._toggle(el.dataset.toggle)); });
+  }
+}
+
+if (!customElements.get("access-card-editor")) { customElements.define("access-card-editor", AccessCardEditor); }
