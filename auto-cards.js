@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.2";
+const CARD_VERSION = "1.9.3";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2214,7 +2214,6 @@ class AccessCard extends HTMLElement {
         return !exPat.some((p) => label.includes(p));
       })
       .sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
-  }
   }
 
   _cover(action, entityId) {
