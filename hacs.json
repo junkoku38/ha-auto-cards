@@ -1,0 +1,7 @@
+{
+  "name": "Auto Cards",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "auto-cards.js",
+  "zip_release": true
+}

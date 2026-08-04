@@ -1,0 +1,13 @@
+{
+  "name": "auto-cards",
+  "version": "1.0.0",
+  "description": "Cartes Lovelace avec découverte automatique pour Home Assistant",
+  "main": "dist/auto-cards.js",
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "lint": "eslint src/"
+  },
+  "keywords": ["home-assistant", "lovelace", "hacs", "auto-discovery"],
+  "license": "MIT"
+}
