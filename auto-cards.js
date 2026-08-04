@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.5";
+const CARD_VERSION = "1.9.6";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2194,6 +2194,21 @@ class AccessCard extends HTMLElement {
     let list = discover(this._hass, { domains: ["cover"], exclude: c.exclude, include: c.include, areas: c.areas });
     if (c.cover_classes) list = list.filter((x) => c.cover_classes.includes(x.device_class || "cover"));
     if (c.exclude_classes.length) list = list.filter((x) => !c.exclude_classes.includes(x.device_class || "cover"));
+
+    // Remplacer l'état par le capteur lié si l'entité est unknown/unavailable
+    const linked = c.linked_sensors || {};
+    list.forEach((x) => {
+      const sensorId = linked[x.entity_id];
+      if (sensorId) {
+        const sensorState = this._hass.states[sensorId];
+        if (sensorState && (x.state === "unknown" || x.state === "unavailable")) {
+          x.original_state = x.state;
+          x.state = sensorState.state === "on" ? "open" : "closed";
+          x.linked_name = sensorState.attributes?.friendly_name || sensorId;
+        }
+      }
+    });
+
     const rank = { gate: 0, garage: 1, door: 2, shutter: 3, blind: 4, window: 5, curtain: 6, awning: 7, shade: 8 };
     return list.sort((a, b) => (rank[a.device_class] ?? 9) - (rank[b.device_class] ?? 9) || a.name.localeCompare(b.name));
   }
@@ -2321,6 +2336,7 @@ class AccessCard extends HTMLElement {
     if (s === "locked") return "Verrouillé";
     if (s === "unlocked") return "Déverrouillé";
     if (s === "unavailable") return "Injoignable";
+    if (s === "unknown") return x.linked_name ? `Via ${x.linked_name}` : "Inconnu";
     return s;
   }
 
