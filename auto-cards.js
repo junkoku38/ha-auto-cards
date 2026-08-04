@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.8.0";
+const CARD_VERSION = "1.9.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -3286,3 +3286,271 @@ class LightsCardEditor extends HTMLElement {
 }
 
 if (!customElements.get("lights-card-editor")) { customElements.define("lights-card-editor", LightsCardEditor); }
+const SUMMARY_CARD_VERSION = "1.0.0";
+
+const SUMMARY_I = {
+  check: `<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 14.5-4-4L8.4 11l2.6 2.6L15.6 9 17 10.4l-6 6.1z"/>`,
+  alert: `<path d="M12 2 1 21h22L12 2zm0 6 7.5 13h-15L12 8zm-1 4v4h2v-4h-2zm0 5v2h2v-2h-2z"/>`,
+  plug: `<path d="M9 2v6H7v3a5 5 0 0 0 4 4.9V22h2v-6.1A5 5 0 0 0 17 11V8h-2V2h-2v6h-2V2H9z"/>`,
+  batt: `<path d="M15.7 4H14V2h-4v2H8.3C7.6 4 7 4.6 7 5.3v15.4c0 .7.6 1.3 1.3 1.3h7.4c.7 0 1.3-.6 1.3-1.3V5.3c0-.7-.6-1.3-1.3-1.3z"/>`,
+  door: `<path d="M11 3H5v18h6v-2H7V5h4V3zm2 0v18h6V3h-6zm3 8.2a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>`,
+  bulb: `<path d="M12 2a7 7 0 0 0-4 12.7V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.3A7 7 0 0 0 12 2zm-2 19h4v.5a1.5 1.5 0 0 1-1.5 1.5h-1A1.5 1.5 0 0 1 10 21.5V21z"/>`,
+  water: `<path d="M12 3s6 6.4 6 10a6 6 0 1 1-12 0c0-3.6 6-10 6-10z"/>`,
+  chevron: `<path d="M9 6l6 6-6 6z"/>`,
+};
+
+const CRITICAL_CLASSES = {
+  smoke: "Fumée", gas: "Gaz", carbon_monoxide: "Monoxyde",
+  moisture: "Fuite d'eau", tamper: "Sabotage", heat: "Surchauffe", cold: "Gel",
+};
+
+const OFFLINE_DOMAINS = [
+  "sensor","binary_sensor","light","switch","cover","climate","lock",
+  "media_player","vacuum","lawn_mower","fan","camera","number","select",
+];
+
+class SummaryCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._built = false;
+    this._els = {};
+    this._entries = null;
+    this._fetchedAt = 0;
+    this._busy = false;
+    this._tick = null;
+    this._sig = "";
+  }
+
+  setConfig(config) {
+    this._config = {
+      name: "Synthèse", exclude: [], areas: null,
+      battery_warning: 20, humidity_high: 70, max_rows: 6,
+      show_lights: true, show_openings: true, show_integrations: true,
+      show_offline: true, show_batteries: true, show_humidity: true,
+      lights_minutes: 0, refresh: 120, ok_message: "Tout va bien",
+      ...(config || {}),
+    };
+    this._built = false;
+    this._sig = "";
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+  }
+
+  static getStubConfig() { return { type: "custom:summary-card" }; }
+
+  getCardSize() { return 4; }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+    if (first && this._config.show_integrations) this._fetchEntries();
+  }
+
+  connectedCallback() {
+    this._tick = setInterval(() => {
+      this._update();
+      if (this._config.show_integrations && Date.now() - this._fetchedAt > this._config.refresh * 1000) this._fetchEntries();
+    }, 20000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  async _fetchEntries() {
+    if (this._busy || !this._hass) return;
+    this._busy = true;
+    try {
+      const res = await this._hass.callWS({ type: "config_entries/get" });
+      this._entries = Array.isArray(res) ? res : [];
+    } catch { this._entries = []; }
+    finally { this._busy = false; this._fetchedAt = Date.now(); this._sig = ""; this._update(); }
+  }
+
+  _issues() {
+    const c = this._config;
+    const hass = this._hass;
+    const out = [];
+
+    // Alertes critiques
+    const crit = discover(hass, { domains: ["binary_sensor"], deviceClasses: Object.keys(CRITICAL_CLASSES), includeDiagnostic: true, exclude: c.exclude, areas: c.areas }).filter((x) => x.state === "on");
+    if (crit.length) out.push({ key: "critical", sev: 3, icon: crit[0].device_class === "moisture" ? SUMMARY_I.water : SUMMARY_I.alert, title: crit.map((x) => CRITICAL_CLASSES[x.device_class]).filter((v, i, a) => a.indexOf(v) === i).join(" · "), detail: crit.map((x) => x.area || x.name).slice(0, 3).join(", "), count: crit.length, entity: crit[0].entity_id });
+
+    // Intégrations en erreur
+    if (c.show_integrations && this._entries) {
+      const broken = this._entries.filter((e) => ["setup_error", "setup_retry", "migration_error"].includes(e.state) && !e.disabled_by);
+      if (broken.length) out.push({ key: "integrations", sev: 2, icon: SUMMARY_I.alert, title: `${broken.length} intégration${broken.length > 1 ? "s" : ""} en erreur`, detail: broken.map((b) => b.title || b.domain).slice(0, 3).join(", "), count: broken.length, entity: broken[0]?.entry_id });
+    }
+
+    // Appareils hors ligne
+    if (c.show_offline) {
+      const devices = new Map();
+      Object.keys(hass.states).forEach((id) => {
+        if (hass.states[id].state !== "unavailable") return;
+        if (!OFFLINE_DOMAINS.includes(id.split(".")[0])) return;
+        const reg = hass.entities?.[id];
+        if (reg?.hidden || reg?.disabled_by) return;
+        const key = reg?.device_id || id;
+        if (!devices.has(key)) { const dev = reg?.device_id ? hass.devices?.[reg.device_id] : null; devices.set(key, { name: dev?.name_by_user || dev?.name || hass.states[id].attributes?.friendly_name || id, entity: id }); }
+      });
+      if (devices.size) out.push({ key: "offline", sev: 2, icon: SUMMARY_I.plug, title: `${devices.size} appareil${devices.size > 1 ? "s" : ""} hors ligne`, detail: [...devices.values()].map((d) => d.name).slice(0, 3).join(", "), count: devices.size, entity: [...devices.values()][0].entity });
+    }
+
+    // Piles faibles
+    if (c.show_batteries) {
+      const low = discover(hass, { domains: ["sensor"], deviceClasses: ["battery"], includeDiagnostic: true, exclude: c.exclude, areas: c.areas, requireNumeric: true }).filter((b) => b.value <= c.battery_warning);
+      if (low.length) out.push({ key: "batteries", sev: 1, icon: SUMMARY_I.batt, title: `${low.length} pile${low.length > 1 ? "s" : ""} à remplacer`, detail: low.sort((a, b) => a.value - b.value).map((b) => `${b.name} ${Math.round(b.value)} %`).slice(0, 2).join(", "), count: low.length, entity: low[0].entity_id });
+    }
+
+    // Ouvrants ouverts
+    if (c.show_openings) {
+      const covers = discover(hass, { domains: ["cover"], exclude: c.exclude, areas: c.areas }).filter((x) => ["open", "opening"].includes(x.state)).filter((x) => ["gate", "garage", "door"].includes(x.device_class || "door"));
+      const doors = discover(hass, { domains: ["binary_sensor"], deviceClasses: ["door", "garage_door", "window"], exclude: c.exclude, areas: c.areas }).filter((x) => x.state === "on");
+      const all = [...covers, ...doors];
+      if (all.length) out.push({ key: "openings", sev: 1, icon: SUMMARY_I.door, title: `${all.length} ouvrant${all.length > 1 ? "s" : ""} ouvert${all.length > 1 ? "s" : ""}`, detail: all.map((x) => x.name).slice(0, 3).join(", "), count: all.length, entity: all[0].entity_id });
+    }
+
+    // Humidité anormale
+    if (c.show_humidity) {
+      const wet = discover(hass, { domains: ["sensor"], deviceClasses: ["humidity"], exclude: c.exclude, areas: c.areas, requireNumeric: true }).filter((h) => h.value >= c.humidity_high);
+      if (wet.length) out.push({ key: "humidity", sev: 1, icon: SUMMARY_I.water, title: `${wet.length} pièce${wet.length > 1 ? "s" : ""} trop humide${wet.length > 1 ? "s" : ""}`, detail: wet.sort((a, b) => b.value - a.value).map((h) => `${h.area || h.name} ${Math.round(h.value)} %`).slice(0, 2).join(", "), count: wet.length, entity: wet[0].entity_id });
+    }
+
+    // Lumières allumées
+    if (c.show_lights) {
+      const on = discover(hass, { domains: ["light"], exclude: c.exclude, areas: c.areas }).filter((l) => l.state === "on" && (!c.lights_minutes || Date.now() - new Date(l.last_changed).getTime() > c.lights_minutes * 60000));
+      if (on.length) out.push({ key: "lights", sev: 0, icon: SUMMARY_I.bulb, title: `${on.length} lumière${on.length > 1 ? "s" : ""} allumée${on.length > 1 ? "s" : ""}`, detail: on.map((l) => l.area || l.name).slice(0, 3).join(", "), count: on.length, entity: on[0].entity_id });
+    }
+
+    return out.sort((a, b) => b.sev - a.sev);
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = `<style>${SummaryCard.styles}</style>
+      <ha-card>
+        <div class="hd"><div class="ic"><svg viewBox="0 0 24 24">${SUMMARY_I.check}</svg></div><div class="tx"><b class="tt">—</b><span class="ts">—</span></div></div>
+        <div class="rows"></div><div class="cf hidden"></div>
+      </ha-card>`;
+    this._built = true;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = { card: $("ha-card"), icon: $(".ic"), title: $(".tt"), sub: $(".ts"), rows: $(".rows"), foot: $(".cf") };
+  }
+
+  _navigate(path) { history.pushState(null, "", path); fireEvent(window, "location-changed", { replace: false }); }
+
+  _update() {
+    const c = this._config;
+    const e = this._els;
+    if (!this._hass || !this._built) return;
+    const issues = this._issues();
+    const worst = issues.length ? issues[0].sev : -1;
+    const sevClass = worst >= 3 ? "red" : worst === 2 ? "red" : worst === 1 ? "warn" : worst === 0 ? "info" : "ok";
+    const actionable = issues.filter((i) => i.sev >= 1).length;
+
+    e.card.className = `s-${sevClass}`;
+    e.icon.className = `ic ${sevClass}`;
+    e.icon.innerHTML = `<svg viewBox="0 0 24 24">${sevClass === "ok" ? SUMMARY_I.check : SUMMARY_I.alert}</svg>`;
+
+    if (!issues.length) { e.title.textContent = c.ok_message; e.sub.textContent = "Aucun point d'attention"; }
+    else if (actionable) { e.title.textContent = `${actionable} point${actionable > 1 ? "s" : ""} à traiter`; e.sub.textContent = issues.filter((i) => i.sev >= 1).map((i) => i.title).slice(0, 2).join(" · "); }
+    else { e.title.textContent = c.ok_message; e.sub.textContent = issues.map((i) => i.title).join(" · "); }
+
+    const sig = issues.map((i) => `${i.key}:${i.count}`).join("|");
+    if (sig === this._sig) return;
+    this._sig = sig;
+
+    const shown = issues.slice(0, c.max_rows);
+    e.rows.innerHTML = shown.map((i) => `<div class="rw sev${i.sev}" data-k="${i.key}" data-e="${i.entity || ""}"><svg class="ri" viewBox="0 0 24 24">${i.icon}</svg><div class="rt"><b>${i.title}</b><span>${i.detail || ""}</span></div><svg class="rc" viewBox="0 0 24 24">${SUMMARY_I.chevron}</svg></div>`).join("");
+    e.rows.classList.toggle("hidden", !shown.length);
+    e.rows.querySelectorAll(".rw").forEach((el) => { el.addEventListener("click", () => { const link = c.links?.[el.dataset.k]; if (link) this._navigate(link); else if (el.dataset.e) fireEvent(this, "hass-more-info", { entityId: el.dataset.e }); }); });
+
+    const hidden = issues.length - shown.length;
+    e.foot.textContent = hidden ? `${hidden} autre${hidden > 1 ? "s" : ""} point d'attention` : "";
+    e.foot.classList.toggle("hidden", !hidden);
+  }
+}
+
+SummaryCard.styles = `
+:host{--su-red:#ff8a7d;--su-warn:#ffc76b;--su-ok:#8fbfae;--su-info:#8fb0c9;display:block;}
+*{box-sizing:border-box;}
+.hidden{display:none !important;}
+ha-card{border-radius:var(--ha-card-border-radius,18px);padding:15px 16px 13px;background:linear-gradient(170deg,#1a1d24 0%,#15181e 60%,#111318 100%);border:1px solid rgba(255,255,255,.06);color:#eef1f6;transition:border-color .3s;font-family:var(--primary-font-family,"Inter","Segoe UI",Roboto,sans-serif);}
+ha-card.s-red{border-color:rgba(255,138,125,.32);}
+ha-card.s-warn{border-color:rgba(255,199,107,.28);}
+.hd{display:flex;align-items:center;gap:12px;}
+.ic{width:38px;height:38px;border-radius:12px;flex-shrink:0;background:rgba(143,191,174,.10);border:1px solid rgba(143,191,174,.26);display:flex;align-items:center;justify-content:center;transition:.3s;}
+.ic svg{width:19px;height:19px;fill:var(--su-ok);}
+.ic.red{background:rgba(255,138,125,.10);border-color:rgba(255,138,125,.28);}
+.ic.red svg{fill:var(--su-red);}
+.ic.warn{background:rgba(255,199,107,.10);border-color:rgba(255,199,107,.28);}
+.ic.warn svg{fill:var(--su-warn);}
+.ic.info{background:rgba(143,176,201,.10);border-color:rgba(143,176,201,.26);}
+.ic.info svg{fill:var(--su-info);}
+.tx{flex:1;min-width:0;}
+.tt{display:block;font-size:16px;font-weight:600;letter-spacing:-.2px;}
+.ts{display:block;font-size:11px;color:rgba(255,255,255,.45);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rows{display:flex;flex-direction:column;margin-top:12px;}
+.rw{display:flex;align-items:center;gap:11px;padding:10px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);}
+.rw:last-child{border-bottom:none;}
+.rw:hover .rt b{color:#fff;}
+.ri{width:16px;height:16px;flex-shrink:0;fill:rgba(255,255,255,.35);}
+.rw.sev3 .ri,.rw.sev2 .ri{fill:var(--su-red);}
+.rw.sev1 .ri{fill:var(--su-warn);}
+.rw.sev0 .ri{fill:var(--su-info);}
+.rt{flex:1;min-width:0;}
+.rt b{display:block;font-size:12px;font-weight:600;transition:.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rw.sev3 .rt b,.rw.sev2 .rt b{color:#ffb3aa;}
+.rt span{display:block;font-size:9.5px;color:rgba(255,255,255,.34);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rc{width:12px;height:12px;fill:rgba(255,255,255,.22);flex-shrink:0;}
+.cf{margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);font-size:9.5px;color:rgba(255,255,255,.32);}
+`;
+
+if (!customElements.get("summary-card")) { customElements.define("summary-card", SummaryCard); }
+
+window.customCards = window.customCards || [];
+window.customCards.push({ type: "summary-card", name: "Summary Card (auto)", description: "Agrège en un bandeau tout ce qui demande une action : alertes, erreurs, piles, ouvrants, lumières.", preview: false, documentationURL: "https://github.com/junkoku38/ha-auto-cards" });
+
+/* ---------- Visual editor ---------- */
+class SummaryCardEditor extends HTMLElement {
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { display: true, filters: false }; }
+  setConfig(config) { this._config = { name: "Synthèse", exclude: [], areas: null, battery_warning: 20, humidity_high: 70, max_rows: 6, show_lights: true, show_openings: true, show_integrations: true, show_offline: true, show_batteries: true, show_humidity: true, lights_minutes: 0, refresh: 120, ok_message: "Tout va bien", ...config }; this._render(); }
+  set hass(hass) { this._hass = hass; }
+  _changed(ev) { const field = ev.target.dataset.field; if (!field) return; let value = ev.target.value; if (ev.target.type === "number") value = value === "" ? 0 : Number(value); else if (ev.target.type === "checkbox") value = ev.target.checked; else if (["exclude", "areas"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); } this._config = { ...this._config, [field]: value }; this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true })); }
+  _toggle(name) { this._sections[name] = !this._sections[name]; const el = this.shadowRoot.querySelector(`[data-section="${name}"]`); if (el) { el.classList.toggle("open", this._sections[name]); const chev = el.querySelector(".chev"); if (chev) chev.textContent = this._sections[name] ? "▾" : "▸"; } }
+  _field(label, field, type, value, placeholder) { const v = value ?? (type === "number" ? 0 : ""); return `<div class="fld"><label>${label}</label><input type="${type}" data-field="${field}" value="${v}" placeholder="${placeholder || ""}"/></div>`; }
+  _checkbox(label, field, checked) { return `<div class="fld chk"><label><input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}/> ${label}</label></div>`; }
+  _textarea(label, field, value, placeholder) { const v = Array.isArray(value) ? value.join(", ") : value || ""; return `<div class="fld"><label>${label}</label><textarea data-field="${field}" placeholder="${placeholder || ""}">${v}</textarea></div>`; }
+  _section(name, label, content) { const open = this._sections[name] || false; return `<div class="sec ${open ? "open" : ""}" data-section="${name}"><div class="sh" data-toggle="${name}"><span>${label}</span><span class="chev">${open ? "▾" : "▸"}</span></div><div class="sb">${content}</div></div>`; }
+  _render() {
+    const c = this._config;
+    this.shadowRoot.innerHTML = `<style>:host{display:block;}*{box-sizing:border-box;}.ed{display:flex;flex-direction:column;gap:8px;padding:12px;}.fld{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}.fld label{font-size:11px;font-weight:600;opacity:.7;}.fld input,.fld select,.fld textarea{font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--secondary-background-color,#fff);color:var(--primary-text-color);font-family:inherit;}.fld textarea{min-height:50px;resize:vertical;}.fld.chk label{display:flex;align-items:center;gap:8px;font-size:13px;}.fld.chk input{width:auto;}.sec{border:1px solid var(--divider-color,#e0e0e0);border-radius:10px;overflow:hidden;}.sh{display:flex;align-items:center;padding:10px 12px;cursor:pointer;background:var(--secondary-background-color,#f5f5f5);font-size:13px;font-weight:600;}.sh .chev{margin-left:auto;font-size:12px;opacity:.5;}.sb{padding:10px 12px;display:none;}.sec.open .sb{display:block;}</style>
+    <div class="ed">
+      ${this._field("Titre", "name", "text", c.name, "Synthèse")}
+      ${this._section("display", "Affichage",
+        this._checkbox("Alertes critiques", "show_alerts", c.show_alerts ?? true) +
+        this._checkbox("Intégrations en erreur", "show_integrations", c.show_integrations) +
+        this._checkbox("Appareils hors ligne", "show_offline", c.show_offline) +
+        this._checkbox("Piles faibles", "show_batteries", c.show_batteries) +
+        this._checkbox("Ouvrants ouverts", "show_openings", c.show_openings) +
+        this._checkbox("Humidité anormale", "show_humidity", c.show_humidity) +
+        this._checkbox("Lumières allumées", "show_lights", c.show_lights) +
+        this._field("Seuil pile (%)", "battery_warning", "number", c.battery_warning) +
+        this._field("Seuil humidité (%)", "humidity_high", "number", c.humidity_high) +
+        this._field("Lignes max", "max_rows", "number", c.max_rows) +
+        this._field("Lumière > (min)", "lights_minutes", "number", c.lights_minutes) +
+        this._field("Message OK", "ok_message", "text", c.ok_message, "Tout va bien")
+      )}
+      ${this._section("filters", "Filtres",
+        this._textarea("Exclure (mots-clés)", "exclude", c.exclude, "sensor.xxx") +
+        this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine")
+      )}
+    </div>`;
+    this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
+    this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => { el.addEventListener("click", () => this._toggle(el.dataset.toggle)); });
+  }
+}
+
+if (!customElements.get("summary-card-editor")) { customElements.define("summary-card-editor", SummaryCardEditor); }
