@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -110,7 +110,7 @@ class ComfortCard extends HTMLElement {
   setConfig(config) {
     this._config = {
       name: "Confort par pièce",
-      exclude: DEFAULT_EXCLUDE,
+      exclude: ENERGY_DEFAULT_EXCLUDE,
       include: [],
       areas: null,
       show_unassigned: false,
@@ -655,107 +655,10 @@ console.info(
 
 /* ---------- Discovery engine (shared) ---------- */
 
-const norm = (s) =>
-  String(s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-function areaOf(hass, entityId) {
-  const ent = hass.entities?.[entityId];
-  if (!ent) return null;
-  if (ent.area_id) return ent.area_id;
-  const dev = ent.device_id ? hass.devices?.[ent.device_id] : null;
-  return dev?.area_id || null;
-}
-
-function areaName(hass, areaId) {
-  return hass.areas?.[areaId]?.name || null;
-}
-
-function discoverLocal(hass, opts = {}) {
-  const {
-    domains = null,
-    deviceClasses = null,
-    units = null,
-    includeDiagnostic = false,
-    includeHidden = false,
-    exclude = [],
-    include = [],
-    areas = null,
-    requireNumeric = false,
-  } = opts;
-
-  const exPat = exclude.map(norm).filter(Boolean);
-  const areaFilter = areas ? areas.map((a) => norm(a)) : null;
-  const out = [];
-
-  Object.keys(hass.states).forEach((id) => {
-    const st = hass.states[id];
-    const forced = include.includes(id);
-
-    if (!forced) {
-      const domain = id.split(".")[0];
-      if (domains && !domains.includes(domain)) return;
-
-      const dc = st.attributes?.device_class;
-      const unit = st.attributes?.unit_of_measurement;
-      const dcOk = deviceClasses ? deviceClasses.includes(dc) : null;
-      const unitOk = units ? units.includes(unit) : null;
-      if (deviceClasses && units) {
-        if (!dcOk && !unitOk) return;
-      } else if (deviceClasses && !dcOk) return;
-      else if (units && !unitOk) return;
-
-      const reg = hass.entities?.[id];
-      if (!includeHidden && (reg?.hidden || reg?.disabled_by)) return;
-      if (!includeDiagnostic && reg?.entity_category) return;
-
-      const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
-      if (exPat.some((p) => label.includes(p))) return;
-      if (requireNumeric && Number.isNaN(Number(st.state))) return;
-    }
-
-    const areaId = areaOf(hass, id);
-    if (areaFilter) {
-      const an = norm(areaName(hass, areaId) || "");
-      if (!areaFilter.includes(norm(areaId || "")) && !areaFilter.includes(an)) return;
-    }
-
-    out.push({
-      entity_id: id,
-      state: st.state,
-      value: Number(st.state),
-      device_class: st.attributes?.device_class,
-      unit: st.attributes?.unit_of_measurement,
-      name: st.attributes?.friendly_name || id,
-      area_id: areaId,
-      area: areaName(hass, areaId),
-    });
-  });
-  return out;
-}
-
-const discover = (hass, opts) =>
-  (window.haAutoCards?.discover || discoverLocal)(hass, opts);
-
-/* ---------- Icons ---------- */
-
-const I = {
-  bolt: `<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/>`,
-  caret: `<path d="M7 10l5 5 5-5z"/>`,
-};
-
-const DEFAULT_EXCLUDE = [
+const ENERGY_DEFAULT_EXCLUDE = [
   "total", "somme", "cumul", "daily", "journalier",
   "yesterday", "hier", "monthly", "mensuel",
 ];
-
-const fireEvent = (node, type, detail = {}) => {
-  const ev = new Event(type, { bubbles: true, cancelable: false, composed: true });
-  ev.detail = detail;
-  node.dispatchEvent(ev);
-};
 
 /* ---------- Card ---------- */
 
@@ -772,7 +675,7 @@ class EnergyCard extends HTMLElement {
   setConfig(config) {
     this._config = {
       name: "Consommation",
-      exclude: DEFAULT_EXCLUDE,
+      exclude: ENERGY_DEFAULT_EXCLUDE,
       include: [],
       areas: null,
       include_diagnostic: false,
