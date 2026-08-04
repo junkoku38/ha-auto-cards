@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.5.0";
+const CARD_VERSION = "1.6.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2523,3 +2523,373 @@ class AccessCardEditor extends HTMLElement {
 }
 
 if (!customElements.get("access-card-editor")) { customElements.define("access-card-editor", AccessCardEditor); }
+/**
+ * Equipment Card — découverte automatique
+ * Capteurs techniques avec détection d'écart sur 7 jours.
+ */
+
+const EQUIPMENT_CARD_VERSION = "1.0.0";
+
+console.info(
+  `%c EQUIPMENT-CARD %c v${EQUIPMENT_CARD_VERSION} `,
+  "color:#15181e;background:#ffc76b;font-weight:700;border-radius:3px 0 0 3px;padding:2px 6px",
+  "color:#ffc76b;background:#15181e;border-radius:0 3px 3px 0;padding:2px 6px"
+);
+
+const EQUIPMENT_I = {
+  thermo: `<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0zM12 4a1 1 0 0 1 1 1v6h-2V5a1 1 0 0 1 1-1z"/>`,
+  caret: `<path d="M7 10l5 5 5-5z"/>`,
+  up: `<path d="M12 5l7 8h-4v6h-6v-6H5z"/>`,
+  down: `<path d="M12 19l-7-8h4V5h6v6h4z"/>`,
+};
+
+const DEFAULT_MATCH = [
+  "ballon","chauffe-eau","chauffe eau","chaudiere","pompe","portail","portillon",
+  "garage","detecteur","alarme","congelateur","frigo","refrigerateur","cave",
+  "atelier","local","technique","serveur","baie","onduleur","compteur",
+  "piscine","bassin","vmc",
+];
+
+class EquipmentCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._built = false;
+    this._els = {};
+    this._base = null;
+    this._fetchedAt = 0;
+    this._busy = false;
+    this._tick = null;
+    this._sig = "";
+    this._openAll = false;
+  }
+
+  setConfig(config) {
+    this._config = {
+      name: "Équipements",
+      match: DEFAULT_MATCH,
+      exclude: [],
+      include: [],
+      device_classes: ["temperature"],
+      baseline_days: 7,
+      deviation: 5,
+      refresh: 3600,
+      max_rows: 0,
+      show_baseline: true,
+      thresholds: {},
+      ...(config || {}),
+    };
+    this._built = false;
+    this._sig = "";
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+  }
+
+  static getStubConfig() { return { type: "custom:equipment-card" }; }
+
+  static getConfigElement() {
+    return document.createElement("equipment-card-editor");
+  }
+
+  getCardSize() { return 8; }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+    if (first) this._fetchBaseline();
+  }
+
+  connectedCallback() {
+    this._tick = setInterval(() => {
+      this._update();
+      if (Date.now() - this._fetchedAt > this._config.refresh * 1000) this._fetchBaseline();
+    }, 30000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  _collect() {
+    const c = this._config;
+    const matchPat = c.match.map(norm).filter(Boolean);
+    const all = discover(this._hass, {
+      domains: ["sensor"],
+      deviceClasses: c.device_classes,
+      includeDiagnostic: true,
+      exclude: c.exclude,
+      include: c.include,
+      requireNumeric: true,
+    });
+    return all
+      .filter((it) => {
+        if (c.include.includes(it.entity_id)) return true;
+        const label = norm(`${it.entity_id} ${it.name} ${it.area || ""}`);
+        return matchPat.some((p) => label.includes(p));
+      })
+      .map((it) => {
+        const base = this._base?.[it.entity_id] ?? null;
+        const th = c.thresholds[it.entity_id];
+        let level = "ok";
+        let note = "";
+        if (th && Array.isArray(th)) {
+          if (it.value < th[0]) { level = "warn"; note = `sous ${th[0]}`; }
+          else if (it.value > th[1]) { level = "warn"; note = `au-dessus de ${th[1]}`; }
+        } else if (base != null) {
+          const d = it.value - base;
+          if (Math.abs(d) >= c.deviation) { level = "warn"; note = `${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)} vs moy.`; }
+        }
+        return { ...it, base, level, note, delta: base != null ? it.value - base : null };
+      })
+      .sort((a, b) =>
+        (b.level === "warn") - (a.level === "warn") ||
+        Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0) || b.value - a.value
+      );
+  }
+
+  async _fetchBaseline() {
+    const c = this._config;
+    if (!c.show_baseline || this._busy || !this._hass) return;
+    const ids = this._collect().filter((it) => it.state_class === "measurement").map((it) => it.entity_id).slice(0, 40);
+    if (!ids.length) { this._fetchedAt = Date.now(); return; }
+    this._busy = true;
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - c.baseline_days * 86400 * 1000);
+      const res = await this._hass.callWS({
+        type: "recorder/statistics_during_period",
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: ids,
+        period: "day",
+        types: ["mean"],
+      });
+      const base = {};
+      Object.keys(res || {}).forEach((id) => {
+        const means = (res[id] || []).map((r) => r.mean).filter((v) => v != null);
+        if (means.length) base[id] = means.reduce((a, b) => a + b, 0) / means.length;
+      });
+      this._base = base;
+    } catch (err) {
+      this._base = this._base || {};
+    } finally {
+      this._busy = false;
+      this._fetchedAt = Date.now();
+      this._sig = "";
+      this._update();
+    }
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = `<style>${EquipmentCard.styles}</style>
+      <ha-card>
+        <div class="ch">
+          <div class="ci"><svg viewBox="0 0 24 24">${EQUIPMENT_I.thermo}</svg></div>
+          <div class="ct"><b>${this._config.name}</b><span class="sub">—</span></div>
+          <div class="cc hidden">—</div>
+        </div>
+        <div class="secw sec-warn hidden"><div class="sec">Écarts détectés</div><div class="rows warn-rows"></div></div>
+        <div class="secw sec-ok hidden"><div class="sec ok-title">Capteurs techniques</div><div class="rows ok-rows"></div></div>
+        <details class="acc hidden"><summary class="accs"><span class="k">Tous les capteurs</span><span class="accv"><span class="rt">—</span><svg class="car" viewBox="0 0 24 24">${EQUIPMENT_I.caret}</svg></span></summary><div class="accb"></div></details>
+        <div class="cf hidden"></div>
+      </ha-card>`;
+    this._built = true;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = {
+      sub: $(".ct .sub"), badge: $(".cc"),
+      secWarn: $(".sec-warn"), warnRows: $(".warn-rows"),
+      secOk: $(".sec-ok"), okTitle: $(".ok-title"), okRows: $(".ok-rows"),
+      acc: $(".acc"), accTotal: $(".accs .rt"), accBody: $(".accb"),
+      foot: $(".cf"),
+    };
+    this._els.acc.addEventListener("toggle", () => { this._openAll = this._els.acc.open; });
+  }
+
+  _fmt(v, dec = 1) {
+    if (v == null || Number.isNaN(v)) return "—";
+    return new Intl.NumberFormat(this._hass?.locale?.language || "fr", { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(v);
+  }
+
+  _row(it) {
+    const unit = it.unit || "";
+    const up = (it.delta ?? 0) > 0;
+    const trend = it.delta != null && Math.abs(it.delta) >= 0.5
+      ? `<span class="dl ${it.level}"><svg viewBox="0 0 24 24">${up ? EQUIPMENT_I.up : EQUIPMENT_I.down}</svg>${this._fmt(Math.abs(it.delta), 1)}</span>` : "";
+    return `<div class="eqr ${it.level}" data-e="${it.entity_id}">
+      <span class="eqn">${it.name}${it.area ? `<i>${it.area}</i>` : ""}</span>
+      ${trend}
+      <span class="eqv">${this._fmt(it.value, 1)}<small>${unit}</small></span></div>`;
+  }
+
+  _update() {
+    const c = this._config;
+    const e = this._els;
+    if (!this._hass || !this._built) return;
+    const items = this._collect();
+    const warn = items.filter((i) => i.level === "warn");
+    const ok = items.filter((i) => i.level !== "warn");
+
+    e.sub.textContent = items.length
+      ? warn.length ? `${items.length} capteurs · ${warn.length} écart${warn.length > 1 ? "s" : ""}` : `${items.length} capteurs · tout est nominal`
+      : "Aucun capteur technique trouvé";
+    e.badge.textContent = warn.length || "OK";
+    e.badge.className = `cc ${warn.length ? "warn" : "ok"}`;
+    e.badge.classList.remove("hidden");
+
+    const sig = items.map((i) => `${i.entity_id}:${i.value.toFixed(1)}:${i.level}`).join("|") + `#${this._base ? Object.keys(this._base).length : 0}`;
+    if (sig === this._sig) return;
+    this._sig = sig;
+
+    if (warn.length) {
+      e.secWarn.classList.remove("hidden");
+      e.warnRows.innerHTML = warn.map((it) => this._row(it)).join("");
+    } else e.secWarn.classList.add("hidden");
+
+    const shown = c.max_rows ? ok.slice(0, c.max_rows) : ok;
+    if (shown.length) {
+      e.secOk.classList.remove("hidden");
+      e.okTitle.textContent = warn.length ? "Autres capteurs" : "Capteurs techniques";
+      e.okRows.innerHTML = shown.map((it) => this._row(it)).join("");
+    } else e.secOk.classList.add("hidden");
+
+    if (c.max_rows && ok.length > c.max_rows) {
+      const rest = ok.slice(c.max_rows);
+      e.acc.classList.remove("hidden");
+      e.accTotal.textContent = `${rest.length} de plus`;
+      e.accBody.innerHTML = rest.map((it) => this._row(it)).join("");
+      e.acc.open = this._openAll;
+    } else e.acc.classList.add("hidden");
+
+    this.shadowRoot.querySelectorAll(".eqr").forEach((el) =>
+      el.addEventListener("click", () => fireEvent(this, "hass-more-info", { entityId: el.dataset.e }))
+    );
+
+    const bits = [];
+    if (this._base && Object.keys(this._base).length) bits.push(`Écarts calculés sur ${c.baseline_days} jours`);
+    else if (c.show_baseline) bits.push("Statistiques indisponibles : écarts non calculés");
+    if (!items.length) bits.push("Ajustez la liste « match » pour désigner vos capteurs techniques");
+    e.foot.textContent = bits.join(" · ");
+    e.foot.classList.toggle("hidden", !bits.length);
+  }
+}
+
+EquipmentCard.styles = `
+:host{--eq-warn:#ffc76b;--eq-ok:#8fbfae;display:block;}
+*{box-sizing:border-box;}
+.hidden{display:none !important;}
+ha-card{border-radius:var(--ha-card-border-radius,18px);padding:16px 16px 14px;background:linear-gradient(170deg,#1a1d24 0%,#15181e 60%,#111318 100%);border:1px solid rgba(255,255,255,.06);color:#eef1f6;font-family:var(--primary-font-family,"Inter","Segoe UI",Roboto,sans-serif);}
+.ch{display:flex;align-items:center;gap:11px;}
+.ci{width:34px;height:34px;border-radius:11px;flex-shrink:0;background:rgba(255,199,107,.10);border:1px solid rgba(255,199,107,.26);display:flex;align-items:center;justify-content:center;}
+.ci svg{width:17px;height:17px;fill:var(--eq-warn);}
+.ct{flex:1;min-width:0;}
+.ct b{display:block;font-size:14px;font-weight:600;}
+.ct .sub{display:block;font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
+.cc{font-size:11px;font-weight:700;border-radius:9px;padding:5px 9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.6);}
+.cc.warn{background:rgba(255,199,107,.12);border-color:rgba(255,199,107,.3);color:var(--eq-warn);}
+.cc.ok{background:rgba(143,191,174,.12);border-color:rgba(143,191,174,.3);color:var(--eq-ok);}
+.sec{font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(255,255,255,.34);font-weight:600;margin:16px 0 4px;}
+.rows{display:flex;flex-direction:column;}
+.eqr{display:flex;align-items:center;gap:9px;padding:9px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);}
+.eqr:last-child{border-bottom:none;}
+.eqr:hover .eqn{color:#eef1f6;}
+.eqn{flex:1;font-size:11.5px;color:rgba(255,255,255,.65);min-width:0;transition:.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eqn i{font-style:normal;font-size:9px;color:rgba(255,255,255,.26);margin-left:7px;}
+.dl{display:flex;align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.35);flex-shrink:0;font-variant-numeric:tabular-nums;}
+.dl svg{width:9px;height:9px;fill:currentColor;}
+.dl.warn{color:var(--eq-warn);}
+.eqv{font-size:13px;font-weight:600;width:66px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;letter-spacing:-.2px;}
+.eqv small{font-size:9.5px;font-weight:400;color:rgba(255,255,255,.4);margin-left:2px;}
+.eqr.warn .eqv{color:var(--eq-warn);}
+.acc{margin-top:11px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:0 12px;transition:.2s;}
+.acc[open]{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.11);}
+.accs{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 0;cursor:pointer;list-style:none;}
+.accs::-webkit-details-marker{display:none;}
+.k{font-size:9px;letter-spacing:1.8px;text-transform:uppercase;color:rgba(255,255,255,.42);font-weight:600;}
+.accv{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.45);}
+.car{width:11px;height:11px;fill:rgba(255,255,255,.35);transition:transform .2s;}
+.acc[open] .car{transform:rotate(180deg);}
+.accb{padding:2px 0 8px;}
+.cf{margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);font-size:9.5px;color:rgba(255,255,255,.34);line-height:1.5;}
+`;
+
+if (!customElements.get("equipment-card")) { customElements.define("equipment-card", EquipmentCard); }
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "equipment-card",
+  name: "Equipment Card (auto)",
+  description: "Capteurs techniques découverts automatiquement, avec détection d'écart sur 7 jours.",
+  preview: false,
+  documentationURL: "https://github.com/junkoku38/ha-auto-cards",
+});
+
+/* ---------- Visual editor ---------- */
+
+class EquipmentCardEditor extends HTMLElement {
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._config = {}; this._sections = { match: true, display: false, baseline: false }; }
+  setConfig(config) {
+    this._config = { name: "Équipements", match: DEFAULT_MATCH, exclude: [], include: [], device_classes: ["temperature"], baseline_days: 7, deviation: 5, refresh: 3600, max_rows: 0, show_baseline: true, thresholds: {}, ...config };
+    this._render();
+  }
+  set hass(hass) { this._hass = hass; }
+  _changed(ev) {
+    const field = ev.target.dataset.field; if (!field) return;
+    let value = ev.target.value;
+    if (ev.target.type === "number") value = value === "" ? 0 : Number(value);
+    else if (ev.target.type === "checkbox") value = ev.target.checked;
+    else if (["match", "exclude", "include", "device_classes"].includes(field)) { value = value.split(",").map((s) => s.trim()).filter(Boolean); }
+    this._config = { ...this._config, [field]: value };
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+  }
+  _toggle(name) {
+    this._sections[name] = !this._sections[name];
+    const el = this.shadowRoot.querySelector(`[data-section="${name}"]`);
+    if (el) { el.classList.toggle("open", this._sections[name]); const chev = el.querySelector(".chev"); if (chev) chev.textContent = this._sections[name] ? "▾" : "▸"; }
+  }
+  _field(label, field, type, value, placeholder) { const v = value ?? (type === "number" ? 0 : ""); return `<div class="fld"><label>${label}</label><input type="${type}" data-field="${field}" value="${v}" placeholder="${placeholder || ""}"/></div>`; }
+  _checkbox(label, field, checked) { return `<div class="fld chk"><label><input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}/> ${label}</label></div>`; }
+  _textarea(label, field, value, placeholder) { const v = Array.isArray(value) ? value.join(", ") : value || ""; return `<div class="fld"><label>${label}</label><textarea data-field="${field}" placeholder="${placeholder || ""}">${v}</textarea></div>`; }
+  _section(name, label, content) { const open = this._sections[name] || false; return `<div class="sec ${open ? "open" : ""}" data-section="${name}"><div class="sh" data-toggle="${name}"><span>${label}</span><span class="chev">${open ? "▾" : "▸"}</span></div><div class="sb">${content}</div></div>`; }
+  _render() {
+    const c = this._config;
+    this.shadowRoot.innerHTML = `<style>
+      :host{display:block;}*{box-sizing:border-box;}
+      .ed{display:flex;flex-direction:column;gap:8px;padding:12px;}
+      .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+      .fld label{font-size:11px;font-weight:600;opacity:.7;}
+      .fld input,.fld select,.fld textarea{font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--secondary-background-color,#fff);color:var(--primary-text-color);font-family:inherit;}
+      .fld textarea{min-height:50px;resize:vertical;}
+      .fld.chk label{display:flex;align-items:center;gap:8px;font-size:13px;}
+      .fld.chk input{width:auto;}
+      .sec{border:1px solid var(--divider-color,#e0e0e0);border-radius:10px;overflow:hidden;}
+      .sh{display:flex;align-items:center;padding:10px 12px;cursor:pointer;background:var(--secondary-background-color,#f5f5f5);font-size:13px;font-weight:600;}
+      .sh .chev{margin-left:auto;font-size:12px;opacity:.5;}
+      .sb{padding:10px 12px;display:none;}
+      .sec.open .sb{display:block;}
+    </style>
+    <div class="ed">
+      ${this._field("Titre", "name", "text", c.name, "Équipements")}
+      ${this._section("match", "Capteurs à surveiller",
+        this._textarea("Mots-clés (nom, pièce)", "match", c.match, "ballon, portail, frigo") +
+        this._textarea("Exclure", "exclude", c.exclude, "sensor.xxx") +
+        this._textarea("Inclure (entity_id)", "include", c.include, "sensor.xxx") +
+        this._textarea("Device classes", "device_classes", c.device_classes, "temperature, humidity")
+      )}
+      ${this._section("display", "Affichage",
+        this._field("Lignes max (0 = illimité)", "max_rows", "number", c.max_rows) +
+        this._field("Écart d'alerte (unité)", "deviation", "number", c.deviation)
+      )}
+      ${this._section("baseline", "Statistiques",
+        this._checkbox("Calculer les écarts", "show_baseline", c.show_baseline) +
+        this._field("Période de référence (jours)", "baseline_days", "number", c.baseline_days) +
+        this._field("Rafraîchissement (secondes)", "refresh", "number", c.refresh)
+      )}
+    </div>`;
+    this.shadowRoot.querySelectorAll("input, select, textarea").forEach((el) => { el.addEventListener("change", (e) => this._changed(e)); el.addEventListener("input", (e) => this._changed(e)); });
+    this.shadowRoot.querySelectorAll("[data-toggle]").forEach((el) => { el.addEventListener("click", () => this._toggle(el.dataset.toggle)); });
+  }
+}
+
+if (!customElements.get("equipment-card-editor")) { customElements.define("equipment-card-editor", EquipmentCardEditor); }
