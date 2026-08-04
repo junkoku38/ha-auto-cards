@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.8";
+const CARD_VERSION = "1.2.9";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -35,6 +35,9 @@ function discover(hass, opts = {}) {
   const {
     domains = null,
     deviceClasses = null,
+    units = null,
+    includeDiagnostic = false,
+    includeHidden = false,
     exclude = [],
     include = [],
     areas = null,
@@ -43,7 +46,6 @@ function discover(hass, opts = {}) {
 
   const exPat = exclude.map(norm).filter(Boolean);
   const areaFilter = areas ? areas.map(norm) : null;
-
   const out = [];
   Object.keys(hass.states).forEach((id) => {
     const st = hass.states[id];
@@ -52,11 +54,18 @@ function discover(hass, opts = {}) {
     if (!forced) {
       const domain = id.split(".")[0];
       if (domains && !domains.includes(domain)) return;
+
       const dc = st.attributes?.device_class;
-      if (deviceClasses && !deviceClasses.includes(dc)) return;
+      const unit = st.attributes?.unit_of_measurement;
+      const dcOk = deviceClasses ? deviceClasses.includes(dc) : null;
+      const unitOk = units ? units.includes(unit) : null;
+      if (deviceClasses && units) {
+        if (!dcOk && !unitOk) return;
+      } else if (deviceClasses && !dcOk) return;
+      else if (units && !unitOk) return;
 
       const reg = hass.entities?.[id];
-      if (reg?.hidden || reg?.disabled_by) return;
+      if (!includeHidden && (reg?.hidden || reg?.disabled_by)) return;
       if (!includeDiagnostic && reg?.entity_category) return;
 
       const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
@@ -974,7 +983,7 @@ if (!customElements.get("energy-card")) {
 
 window.haAutoCards = window.haAutoCards || {};
 if (!window.haAutoCards.discover) {
-  window.haAutoCards.discover = discoverLocal;
+  window.haAutoCards.discover = discover;
   window.haAutoCards.areaOf = areaOf;
 }
 
@@ -1218,7 +1227,7 @@ class BatteryCard extends HTMLElement {
 
   _batteries() {
     const c = this._config;
-    const discover = window.haAutoCards?.discover || discoverLocal;
+    const discover = window.haAutoCards?.discover || discover;
     const numeric = discover(this._hass, {
       domains: ["sensor"],
       deviceClasses: ["battery"],
