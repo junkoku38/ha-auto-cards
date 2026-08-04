@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.1.5";
+const CARD_VERSION = "1.1.6";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -665,6 +665,7 @@ console.info(
 
 const ENERGY_DEFAULT_EXCLUDE = [
   "ballon",
+  "consumption",
   "total", "somme", "cumul", "daily", "journalier",
   "yesterday", "hier", "monthly", "mensuel",
 ];
