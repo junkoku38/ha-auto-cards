@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.6";
+const CARD_VERSION = "1.9.7";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1204,6 +1204,7 @@ class BatteryCard extends HTMLElement {
       areas: null,
       show_all: true,
       max_rows: 0,
+      collapse_threshold: 50,
       ...(config || {}),
     };
     this._built = false;
@@ -1353,25 +1354,26 @@ class BatteryCard extends HTMLElement {
     if (sig === this._sig) return;
     this._sig = sig;
 
-    /* Toutes les piles triées par % (les plus faibles en premier) */
-    const notFull = bats.filter((b) => b.value < 100);
-    const full = bats.filter((b) => b.value >= 100 && !b.unavailable);
+    /* Piles visibles (en-dessous du seuil de repli) */
+    const collapseAt = c.collapse_threshold ?? 100;
+    const visible = bats.filter((b) => b.value < collapseAt || b.unavailable);
+    const collapsed = bats.filter((b) => b.value >= collapseAt && !b.unavailable);
 
-    if (notFull.length) {
+    if (visible.length) {
       e.secBatt.classList.remove("hidden");
       e.secBatt.querySelector(".sec").textContent = bad.length
-        ? `${bad.length} à remplacer · ${notFull.length} piles < 100%`
-        : `${notFull.length} piles · tout va bien`;
-      e.bad.innerHTML = notFull.map((b) => this._bRow(b)).join("");
+        ? `${bad.length} à remplacer · ${visible.length} piles < ${collapseAt}%`
+        : `${visible.length} piles · tout va bien`;
+      e.bad.innerHTML = visible.map((b) => this._bRow(b)).join("");
     } else {
       e.secBatt.classList.add("hidden");
     }
 
-    /* Batteries à 100% dans la section repliable */
-    if (full.length) {
+    /* Batteries au-dessus du seuil dans la section repliable */
+    if (collapsed.length) {
       e.acc.classList.remove("hidden");
-      e.accTotal.textContent = `${full.length} piles à 100%`;
-      e.accBody.innerHTML = full.map((b) => this._bRow(b)).join("");
+      e.accTotal.textContent = `${collapsed.length} piles ≥ ${collapseAt}%`;
+      e.accBody.innerHTML = collapsed.map((b) => this._bRow(b)).join("");
       e.acc.open = this._openAll;
     } else e.acc.classList.add("hidden");
 
@@ -1504,6 +1506,7 @@ class BatteryCardEditor extends HTMLElement {
       areas: null,
       show_all: true,
       max_rows: 0,
+      collapse_threshold: 50,
       ...config,
     };
     this._render();
@@ -1594,7 +1597,8 @@ class BatteryCardEditor extends HTMLElement {
         this._textarea("Inclure (entity_id, virgules)", "include", c.include, "sensor.xxx") +
         this._textarea("Pièces (restreindre)", "areas", c.areas, "salon, cuisine") +
         this._checkbox("Afficher toutes les piles", "show_all", c.show_all) +
-        this._field("Lignes max (0 = illimité)", "max_rows", "number", c.max_rows)
+        this._field("Lignes max (0 = illimité)", "max_rows", "number", c.max_rows) +
+        this._field("Replier au-dessus de (%)", "collapse_threshold", "number", c.collapse_threshold)
       )}
     </div>`;
 
