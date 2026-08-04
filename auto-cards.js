@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.9";
+const CARD_VERSION = "1.3.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1265,7 +1265,7 @@ class BatteryCard extends HTMLElement {
         </div>
 
         <details class="acc hidden">
-          <summary class="accs"><span class="k">Toutes les piles</span>
+          <summary class="accs"><span class="k">Piles à 100%</span>
             <span class="accv"><span class="rt">—</span>
               <svg class="car" viewBox="0 0 24 24">${BATTERY_I.caret}</svg></span></summary>
           <div class="accb"></div>
@@ -1343,19 +1343,26 @@ class BatteryCard extends HTMLElement {
     this._sig = sig;
 
     /* Toutes les piles triées par % (les plus faibles en premier) */
-    if (bats.length) {
+    const notFull = bats.filter((b) => b.value < 100);
+    const full = bats.filter((b) => b.value >= 100);
+
+    if (notFull.length) {
       e.secBatt.classList.remove("hidden");
       e.secBatt.querySelector(".sec").textContent = bad.length
-        ? `${bad.length} à remplacer · ${bats.length} au total`
-        : `${bats.length} piles · tout va bien`;
-      const shown = c.max_rows ? bats.slice(0, c.max_rows) : bats;
-      e.bad.innerHTML = shown.map((b) => this._bRow(b)).join("");
+        ? `${bad.length} à remplacer · ${notFull.length} piles < 100%`
+        : `${notFull.length} piles · tout va bien`;
+      e.bad.innerHTML = notFull.map((b) => this._bRow(b)).join("");
     } else {
       e.secBatt.classList.add("hidden");
     }
 
-    /* Section repliable masquée — tout est affiché ci-dessus */
-    e.acc.classList.add("hidden");
+    /* Batteries à 100% dans la section repliable */
+    if (full.length) {
+      e.acc.classList.remove("hidden");
+      e.accTotal.textContent = `${full.length} piles à 100%`;
+      e.accBody.innerHTML = full.map((b) => this._bRow(b)).join("");
+      e.acc.open = this._openAll;
+    } else e.acc.classList.add("hidden");
 
     this.shadowRoot.querySelectorAll("[data-e]").forEach((el) =>
       el.addEventListener("click", () =>
