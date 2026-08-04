@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.1.1";
+const CARD_VERSION = "1.1.2";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -662,6 +662,11 @@ const ENERGY_DEFAULT_EXCLUDE = [
 
 /* ---------- Card ---------- */
 
+const ENERGY_I = {
+  bolt: `<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/>`,
+  caret: `<path d="M7 10l5 5 5-5z"/>`,
+};
+
 class EnergyCard extends HTMLElement {
   constructor() {
     super();
@@ -766,7 +771,7 @@ class EnergyCard extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${EnergyCard.styles}</style>
       <ha-card>
         <div class="ch">
-          <div class="ci"><svg viewBox="0 0 24 24">${I.bolt}</svg></div>
+          <div class="ci"><svg viewBox="0 0 24 24">${ENERGY_I.bolt}</svg></div>
           <div class="ct"><b>${this._config.name}</b><span class="sub">—</span></div>
         </div>
         <div class="ehero">
@@ -778,7 +783,7 @@ class EnergyCard extends HTMLElement {
         <details class="acc hidden">
           <summary class="accs"><span class="k">—</span>
             <span class="accv"><span class="rt">—</span>
-              <svg class="car" viewBox="0 0 24 24">${I.caret}</svg></span></summary>
+              <svg class="car" viewBox="0 0 24 24">${ENERGY_I.caret}</svg></span></summary>
           <div class="accb"></div>
         </details>
         <div class="cf"></div>
