@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.6.3";
+const CARD_VERSION = "1.7.0";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -92,6 +92,8 @@ function discover(hass, opts = {}) {
       state: st.state,
       value: Number(st.state),
       device_class: st.attributes?.device_class,
+      unit: st.attributes?.unit_of_measurement,
+      state_class: st.attributes?.state_class,
       name: cleanName,
       area_id: areaId,
       area: areaName(hass, areaId),
@@ -2691,8 +2693,7 @@ class EquipmentCard extends HTMLElement {
           <div class="cc hidden">—</div>
         </div>
         <div class="secw sec-warn hidden"><div class="sec">Écarts détectés</div><div class="rows warn-rows"></div></div>
-        <div class="secw sec-ok hidden"><div class="sec ok-title">Capteurs techniques</div><div class="rows ok-rows"></div></div>
-        <details class="acc hidden"><summary class="accs"><span class="k">Tous les capteurs</span><span class="accv"><span class="rt">—</span><svg class="car" viewBox="0 0 24 24">${EQUIPMENT_I.caret}</svg></span></summary><div class="accb"></div></details>
+        <details class="sec-ok hidden"><summary class="ok-summary"><span class="k">Capteurs OK</span><span class="ok-count">—</span><svg class="car" viewBox="0 0 24 24">${EQUIPMENT_I.caret}</svg></summary><div class="rows ok-rows"></div></details>
         <div class="cf hidden"></div>
       </ha-card>`;
     this._built = true;
@@ -2700,11 +2701,9 @@ class EquipmentCard extends HTMLElement {
     this._els = {
       sub: $(".ct .sub"), badge: $(".cc"),
       secWarn: $(".sec-warn"), warnRows: $(".warn-rows"),
-      secOk: $(".sec-ok"), okTitle: $(".ok-title"), okRows: $(".ok-rows"),
-      acc: $(".acc"), accTotal: $(".accs .rt"), accBody: $(".accb"),
+      secOk: $(".sec-ok"), okCount: $(".ok-count"), okRows: $(".ok-rows"),
       foot: $(".cf"),
     };
-    this._els.acc.addEventListener("toggle", () => { this._openAll = this._els.acc.open; });
   }
 
   _fmt(v, dec = 1) {
@@ -2739,6 +2738,7 @@ class EquipmentCard extends HTMLElement {
       ? `<span class="dl ${it.level}"><svg viewBox="0 0 24 24">${up ? EQUIPMENT_I.up : EQUIPMENT_I.down}</svg>${this._fmt(Math.abs(it.delta), 1)}${unit}</span>` : "";
     const cleanName = this._cleanName(it.name);
     const verdict = this._verdictLabel(it);
+    const valColor = it.level === "warn" ? "var(--eq-warn)" : "rgba(255,255,255,.85)";
     return `<div class="eqr ${it.level}" data-e="${it.entity_id}">
       <span class="eq-ico"><svg viewBox="0 0 24 24">${EQUIPMENT_I.thermo}</svg></span>
       <div class="eq-info">
@@ -2746,7 +2746,7 @@ class EquipmentCard extends HTMLElement {
         <span class="eq-verdict ${it.level}">${verdict}</span>
       </div>
       ${trend}
-      <span class="eqv">${this._fmt(it.value, 1)}<span class="eq-unit">${unit}</span></span>
+      <span class="eqv" style="color:${valColor}">${this._fmt(it.value, 1)}<span class="eq-unit">${unit}</span></span>
     </div>`;
   }
 
@@ -2769,34 +2769,27 @@ class EquipmentCard extends HTMLElement {
     if (sig === this._sig) return;
     this._sig = sig;
 
+    /* Section écarts */
     if (warn.length) {
       e.secWarn.classList.remove("hidden");
       e.warnRows.innerHTML = warn.map((it) => this._row(it)).join("");
     } else e.secWarn.classList.add("hidden");
 
-    const shown = c.max_rows ? ok.slice(0, c.max_rows) : ok;
-    if (shown.length) {
+    /* Section OK repliable */
+    if (ok.length) {
       e.secOk.classList.remove("hidden");
-      e.okTitle.textContent = warn.length ? "Autres capteurs" : "Capteurs techniques";
-      e.okRows.innerHTML = shown.map((it) => this._row(it)).join("");
+      e.okCount.textContent = `${ok.length}`;
+      e.okRows.innerHTML = ok.map((it) => this._row(it)).join("");
     } else e.secOk.classList.add("hidden");
-
-    if (c.max_rows && ok.length > c.max_rows) {
-      const rest = ok.slice(c.max_rows);
-      e.acc.classList.remove("hidden");
-      e.accTotal.textContent = `${rest.length} de plus`;
-      e.accBody.innerHTML = rest.map((it) => this._row(it)).join("");
-      e.acc.open = this._openAll;
-    } else e.acc.classList.add("hidden");
 
     this.shadowRoot.querySelectorAll(".eqr").forEach((el) =>
       el.addEventListener("click", () => fireEvent(this, "hass-more-info", { entityId: el.dataset.e }))
     );
 
     const bits = [];
-    if (this._base && Object.keys(this._base).length) bits.push(`Écarts calculés sur ${c.baseline_days} jours`);
-    else if (c.show_baseline) bits.push("Statistiques indisponibles : écarts non calculés");
-    if (!items.length) bits.push("Ajustez la liste « match » pour désigner vos capteurs techniques");
+    if (this._base && Object.keys(this._base).length) bits.push(`Écarts sur ${c.baseline_days} jours`);
+    else if (c.show_baseline) bits.push("Baseline non chargée");
+    if (!items.length) bits.push("Ajustez « match » pour vos capteurs");
     e.foot.textContent = bits.join(" · ");
     e.foot.classList.toggle("hidden", !bits.length);
   }
