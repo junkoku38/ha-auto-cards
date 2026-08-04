@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.6";
+const CARD_VERSION = "1.2.7";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1336,7 +1336,7 @@ class BatteryCard extends HTMLElement {
     /* Toutes les piles triées par % (les plus faibles en premier) */
     if (bats.length) {
       e.secBatt.classList.remove("hidden");
-      e.sec.querySelector(".sec").textContent = bad.length
+      e.secBatt.querySelector(".sec").textContent = bad.length
         ? `${bad.length} à remplacer · ${bats.length} au total`
         : `${bats.length} piles · tout va bien`;
       const shown = c.max_rows ? bats.slice(0, c.max_rows) : bats;
