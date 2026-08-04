@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.3";
+const CARD_VERSION = "1.2.4";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1166,28 +1166,10 @@ const OFFLINE_DOMAINS = [
   "device_tracker", "number", "select", "button",
 ];
 
-/* Motifs exclus de la détection hors ligne : entités non pertinentes */
-const OFFLINE_EXCLUDE = [
-  "next_alarm", "next alarm",
-  "litiere", "litière",
-  "identifier", "identify",
-  "countdown",
-  "power_outage_memory",
-  "indicator_mode",
-  "switch_type",
-  "child_lock",
-  "poids", "weight",
-  "tension", "voltage",
-  "courant", "current",
-  "energie",
-  "puissance_apparente",
-  "puissance_reactive",
-  "tension_efficace",
-  "courant_apparent",
-  "courant_reactif",
-  "courant_efficace",
-  "puissance_reactive",
-];
+/* La détection hors ligne ne s'applique qu'aux entités dont le nom
+   contient "batterie" ou "battery" — évite d'afficher les litières,
+   alarmes, tensions, etc. */
+const OFFLINE_INCLUDE = ["batterie", "battery"];
 
 /* ---------- Card ---------- */
 
@@ -1267,7 +1249,8 @@ class BatteryCard extends HTMLElement {
     if (!c.show_offline) return [];
     const hass = this._hass;
     const bad = c.include_unknown ? ["unavailable", "unknown"] : ["unavailable"];
-    const exPat = [...c.exclude, ...OFFLINE_EXCLUDE].map(norm).filter(Boolean);
+    const exPat = c.exclude.map(norm).filter(Boolean);
+    const inPat = OFFLINE_INCLUDE.map(norm).filter(Boolean);
     const out = [];
 
     Object.keys(hass.states).forEach((id) => {
@@ -1280,6 +1263,8 @@ class BatteryCard extends HTMLElement {
       if (reg?.entity_category) return;
       const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
       if (exPat.some((p) => label.includes(p))) return;
+      /* Ne garder que les entités dont le nom évoque une batterie */
+      if (inPat.length && !inPat.some((p) => label.includes(p))) return;
 
       out.push({
         entity_id: id,
