@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.3.1";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1227,7 +1227,6 @@ class BatteryCard extends HTMLElement {
 
   _batteries() {
     const c = this._config;
-    const discover = window.haAutoCards?.discover || discover;
     const numeric = discover(this._hass, {
       domains: ["sensor"],
       deviceClasses: ["battery"],
@@ -1235,7 +1234,10 @@ class BatteryCard extends HTMLElement {
       exclude: c.exclude,
       include: c.include,
       areas: c.areas,
-    }).filter((b) => !Number.isNaN(b.value));
+    }).map((b) => {
+      const v = Number(b.state);
+      return { ...b, value: Number.isNaN(v) ? -1 : v, unavailable: Number.isNaN(v) };
+    });
 
     const binary = discover(this._hass, {
       domains: ["binary_sensor"],
@@ -1308,6 +1310,13 @@ class BatteryCard extends HTMLElement {
 
   _bRow(b) {
     const c = this._config;
+    if (b.unavailable) {
+      return `<div class="br2 crit" data-e="${b.entity_id}">
+        <span class="bn" title="${b.name}">${b.name}</span>
+        <span class="bb"><i style="width:0%;background:#ff8a7d"></i></span>
+        <span class="bp" style="color:#ff8a7d">N/A</span>
+      </div>`;
+    }
     const crit = b.value <= c.critical;
     const warn = b.value <= c.warning;
     const col = crit ? "#ff8a7d" : warn ? "#ffc76b" : "#8fbfae";
@@ -1325,10 +1334,10 @@ class BatteryCard extends HTMLElement {
     if (!this._hass || !this._built) return;
 
     const bats = this._batteries();
-    const bad = bats.filter((b) => b.value <= c.warning);
-    const crit = bats.filter((b) => b.value <= c.critical);
+    const bad = bats.filter((b) => b.value <= c.warning || b.unavailable);
+    const crit = bats.filter((b) => b.value <= c.critical || b.unavailable);
 
-    const sig = bats.map((b) => `${b.entity_id}:${Math.round(b.value)}`).join("|");
+    const sig = bats.map((b) => `${b.entity_id}:${b.unavailable ? "N/A" : Math.round(b.value)}`).join("|");
 
     const parts = [];
     if (crit.length) parts.push(`${crit.length} critique${crit.length > 1 ? "s" : ""}`);
@@ -1344,7 +1353,7 @@ class BatteryCard extends HTMLElement {
 
     /* Toutes les piles triées par % (les plus faibles en premier) */
     const notFull = bats.filter((b) => b.value < 100);
-    const full = bats.filter((b) => b.value >= 100);
+    const full = bats.filter((b) => b.value >= 100 && !b.unavailable);
 
     if (notFull.length) {
       e.secBatt.classList.remove("hidden");
