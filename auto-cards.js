@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.9.1";
+const CARD_VERSION = "1.9.2";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -2193,7 +2193,7 @@ class AccessCard extends HTMLElement {
     let list = discover(this._hass, { domains: ["cover"], exclude: c.exclude, include: c.include, areas: c.areas });
     if (c.cover_classes) list = list.filter((x) => c.cover_classes.includes(x.device_class || "cover"));
     if (c.exclude_classes.length) list = list.filter((x) => !c.exclude_classes.includes(x.device_class || "cover"));
-    const rank = { gate: 0, garage: 1, door: 2, window: 3 };
+    const rank = { gate: 0, garage: 1, door: 2, shutter: 3, blind: 4, window: 5, curtain: 6, awning: 7, shade: 8 };
     return list.sort((a, b) => (rank[a.device_class] ?? 9) - (rank[b.device_class] ?? 9) || a.name.localeCompare(b.name));
   }
 
@@ -2206,7 +2206,15 @@ class AccessCard extends HTMLElement {
   _openings() {
     const c = this._config;
     if (!c.show_openings) return [];
-    return discover(this._hass, { domains: ["binary_sensor"], deviceClasses: ["door", "window", "garage_door", "opening"], exclude: c.exclude, areas: c.areas }).sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
+    // Exclure les sondes de radiateurs et réfrigérateurs qui ont device_class "door"
+    const exPat = [...(c.exclude || []), "radiateur", "frigo", "refrigerateur", "lave", "laveuse", "seche", "dishwasher", "lave-linge", "lave-vaisselle"].map(norm).filter(Boolean);
+    return discover(this._hass, { domains: ["binary_sensor"], deviceClasses: ["door", "window", "garage_door", "opening"], exclude: exPat, areas: c.areas })
+      .filter((x) => {
+        const label = norm(`${x.entity_id} ${x.name}`);
+        return !exPat.some((p) => label.includes(p));
+      })
+      .sort((a, b) => (b.state === "on") - (a.state === "on") || a.name.localeCompare(b.name));
+  }
   }
 
   _cover(action, entityId) {
