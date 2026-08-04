@@ -3,7 +3,7 @@
  * Regroupe température et humidité par pièce, sans configuration d'entités.
  */
 
-const CARD_VERSION = "1.2.1";
+const CARD_VERSION = "1.2.2";
 
 console.info(
   `%c COMFORT-CARD %c v${CARD_VERSION} `,
@@ -1254,6 +1254,7 @@ class BatteryCard extends HTMLElement {
       if (!OFFLINE_DOMAINS.includes(domain)) return;
       const reg = hass.entities?.[id];
       if (reg?.hidden || reg?.disabled_by) return;
+      if (reg?.entity_category) return;
       const label = norm(`${id} ${st.attributes?.friendly_name || ""}`);
       if (exPat.some((p) => label.includes(p))) return;
 
